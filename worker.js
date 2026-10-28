@@ -1,7 +1,9 @@
 // Cloudflare Worker: sirve la app (carpeta public/), reenvía /etoro/* a la API de eToro
 // añadiendo las claves (secretos del Worker, nunca llegan al navegador), guarda el histórico
-// de velas de 1 min y, cada 15 minutos, calcula la recomendación y la envía por ntfy.
+// de velas de 1 min y, cada 15 minutos, calcula cuánto se espera que se mueva el oro, avisa por ntfy
+// cuando se espera mucho movimiento y sigue en papel la ruptura de 1 h a favor de la tendencia diaria.
 import './public/indicators.js'; // define globalThis.GoldTA
+import './public/movement.js'; // define globalThis.GoldMove
 
 const ETORO = 'https://public-api.etoro.com';
 const GOLD_ID_FALLBACK = 18;
@@ -31,15 +33,17 @@ async function goldId(env) {
   return id;
 }
 
-async function fetchCandles(env, count = 1000) {
+const INTERVAL_MIN = { OneMinute: 1, FifteenMinutes: 15, OneHour: 60, OneDay: 1440 };
+async function fetchCandles(env, count = 1000, interval = 'OneMinute') {
   const id = await goldId(env);
-  const r = await etoro(env, `/api/v1/market-data/instruments/${id}/history/candles/asc/OneMinute/${count}`);
+  const r = await etoro(env, `/api/v1/market-data/instruments/${id}/history/candles/asc/${interval}/${count}`);
   if (!r.ok) throw new Error('eToro respondió ' + r.status);
   const j = await r.json();
   return ((j.candles && j.candles[0] && j.candles[0].candles) || [])
     .map((k) => ({ time: Math.floor(Date.parse(k.fromDate) / 1000), open: +k.open, high: +k.high, low: +k.low, close: +k.close }))
     .filter((k) => isFinite(k.close)).sort((a, b) => a.time - b.time);
 }
+const closedOnly = (candles, interval, now = Date.now() / 1000) => candles.filter((k) => k.time + INTERVAL_MIN[interval] * 60 <= now);
 
 // Histórico: una clave por día UTC, con velas compactas [t, o, h, l, c]. Solo se guardan velas cerradas.
 const dayKey = (t) => 'c1:' + new Date(t * 1000).toISOString().slice(0, 10);
@@ -91,48 +95,70 @@ function cleanParams(p) {
   return out;
 }
 
-const fmt = (x) => (x == null ? '—' : x.toFixed(2));
+const fmt = (x, d = 2) => (x == null || !isFinite(x) ? '—' : x.toFixed(d));
+const pct = (x) => Math.round(x * 100) + '%';
 
-async function ntfy(env, s, prev) {
-  const changed = s.action === 'ESPERAR';
-  const message = changed
-    ? `Pasa de ${prev} a ESPERAR a $${fmt(s.price)}. ${s.reason}.`
-    : `${s.action} a $${fmt(s.price)} · stop ${fmt(s.stop)} · objetivo ${fmt(s.target)}\n` +
-      `Puntuación ${s.score >= 0 ? '+' : ''}${s.score.toFixed(2)}, ${Math.round(s.agree * 100)}% de medidores de acuerdo.\n` +
-      'Orientativo, no es asesoramiento financiero.';
+async function ntfy(env, { title, message, tags, priority }) {
   const headers = { 'content-type': 'application/json' };
   if (env.NTFY_TOKEN) headers.authorization = 'Bearer ' + env.NTFY_TOKEN;
   const r = await fetch((env.NTFY_SERVER || 'https://ntfy.sh').replace(/\/$/, ''), {
     method: 'POST', headers,
-    body: JSON.stringify({
-      topic: env.NTFY_TOPIC,
-      title: changed ? 'Cortés: oro, ahora ESPERAR' : `Cortés: ${s.action} oro`,
-      message,
-      tags: [changed ? 'pause_button' : s.action === 'COMPRAR' ? 'chart_with_upwards_trend' : 'chart_with_downwards_trend'],
-      priority: changed ? 3 : 4,
-      click: env.APP_URL || undefined,
-    }),
+    body: JSON.stringify({ topic: env.NTFY_TOPIC, title, message, tags, priority, click: env.APP_URL || undefined }),
   });
   if (!r.ok) throw new Error('ntfy respondió ' + r.status);
 }
 
-// Cada 15 min: guarda velas y avisa si hay COMPRAR/VENDER, o si se pasa de COMPRAR/VENDER a ESPERAR.
+const refs = (env) => ({ m15: +(env.REF_15M || 5), h1: +(env.REF_1H || 10), h4: +(env.REF_4H || 20) });
+
+// Avisa al pasar a movimiento ALTO en la próxima hora, y otra vez cuando se calma.
+async function movementAlert(env, c1, c15) {
+  const f = globalThis.GoldMove.forecast({ 1: c1, 15: c15 }, refs(env));
+  const h1 = f.find((x) => x.id === 'h1'); if (!h1) return 'sin previsión';
+  const prev = (await env.STATE.get('moveLevel')) || 'BAJO';
+  const now = h1.level;
+  if (now !== prev) await env.STATE.put('moveLevel', now);
+  if (!env.NTFY_TOPIC || (now === 'ALTO') === (prev === 'ALTO')) return `${prev} -> ${now}`;
+  const lines = f.map((x) => `${x.label}: rango ~${fmt(x.range, 0)} $ · ${pct(x.prob)} de alejarse ≥${x.ref} $`).join('\n');
+  await ntfy(env, now === 'ALTO'
+    ? { title: 'Cortés: se espera mucho movimiento en el oro', message: `Precio ${fmt(h1.price)} $.\n${lines}\nIndica tamaño, no dirección.`, tags: ['zap'], priority: 4 }
+    : { title: 'Cortés: el oro se calma', message: `Precio ${fmt(h1.price)} $.\n${lines}`, tags: ['zzz'], priority: 2 });
+  return `${prev} -> ${now} (aviso enviado)`;
+}
+
+// Ruptura de 1 h en papel: abre al cierre de la vela de 1 h y cierra 4 h después con el precio de ese momento.
+const SPREAD = 0.5;
+async function paperBreakout(env, c1) {
+  const paper = JSON.parse((await env.STATE.get('paper')) || '{"open":[],"closed":[]}');
+  const now = Date.now() / 1000, price = c1.length ? c1[c1.length - 1].close : NaN;
+  let changed = false;
+  for (const t of paper.open.filter((x) => now >= x.time + 3600 + 4 * 3600 && isFinite(price))) {
+    const dir = t.side === 'LARGO' ? 1 : -1;
+    paper.closed.push({ ...t, exitTime: Math.floor(now), exit: price, pnl: +(dir * (price - t.entry) - SPREAD).toFixed(2) });
+    paper.open = paper.open.filter((x) => x !== t); changed = true;
+  }
+  let opened = null;
+  if (new Date().getUTCMinutes() < 15 && !paper.open.length) { // primera ejecución tras el cierre de cada hora
+    const [h, d] = await Promise.all([fetchCandles(env, 30, 'OneHour'), fetchCandles(env, 40, 'OneDay')]);
+    const sig = globalThis.GoldMove.breakout1h(closedOnly(h, 'OneHour'), closedOnly(d, 'OneDay'));
+    if (sig && !paper.closed.some((x) => x.time === sig.time)) {
+      opened = { side: sig.side, time: sig.time, entry: sig.price, level: sig.level };
+      paper.open.push(opened); changed = true;
+    }
+  }
+  paper.closed = paper.closed.slice(-300);
+  if (changed) await env.STATE.put('paper', JSON.stringify(paper));
+  return opened ? `papel: abre ${opened.side} a ${opened.entry}` : 'papel: sin cambios';
+}
+
+// Cada 15 min: guarda velas, avisa de movimiento y actualiza la prueba en papel.
 async function checkAndNotify(env) {
-  const candles = await fetchCandles(env);
-  await storeHistory(env, candles);
-  if (!env.NTFY_TOPIC) return 'sin tema de ntfy';
-  // Solo velas cerradas: la última puede estar todavía formándose.
-  const closed = candles.filter((k) => k.time + 60 <= Date.now() / 1000);
-  if (closed.length < 80) return 'sin datos';
-  // Con el mercado cerrado (fin de semana, pausa diaria) la última vela se queda vieja: no avisamos.
-  if (Date.now() / 1000 - closed[closed.length - 1].time > 20 * 60) return 'mercado cerrado';
-  const I = globalThis.GoldTA.computeAll(closed);
-  const s = globalThis.GoldTA.signalAt(I, closed.length - 1, await getParams(env));
-  const prev = (await env.STATE.get('lastAction')) || 'ESPERAR';
-  const send = s.action !== 'ESPERAR' || prev !== 'ESPERAR';
-  if (send) await ntfy(env, s, prev);
-  if (s.action !== prev) await env.STATE.put('lastAction', s.action);
-  return `${prev} -> ${s.action}${send ? ' (aviso enviado)' : ''}`;
+  const [raw1, raw15] = await Promise.all([fetchCandles(env, 1000), fetchCandles(env, 300, 'FifteenMinutes')]);
+  await storeHistory(env, raw1);
+  const c1 = closedOnly(raw1, 'OneMinute'), c15 = closedOnly(raw15, 'FifteenMinutes');
+  if (!c1.length || Date.now() / 1000 - c1[c1.length - 1].time > 20 * 60) return 'mercado cerrado';
+  const a = await movementAlert(env, c1, c15);
+  const b = await paperBreakout(env, c1);
+  return a + ' · ' + b;
 }
 
 const json = (data, status = 200) => Response.json(data, { status, headers: { 'cache-control': 'no-store' } });
@@ -152,6 +178,11 @@ export default {
         return json(await getParams(env));
       }
       return json({ error: 'No permitido' }, 405);
+    }
+    if (url.pathname.endsWith('/api/paper')) {
+      return new Response((await env.STATE.get('paper')) || '{"open":[],"closed":[]}', {
+        headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
+      });
     }
     if (url.pathname.endsWith('/api/history')) {
       const days = Math.min(HISTORY_DAYS_MAX, Math.max(1, +url.searchParams.get('days') || 14));

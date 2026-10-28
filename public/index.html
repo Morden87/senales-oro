@@ -62,66 +62,60 @@
   .chk input { width: auto; }
   .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
   .primary { background: var(--gold); color: #1a1405; border-color: var(--gold); font-weight: 700; }
+  .mv { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
+  .mv > div { background: var(--panel2); border-radius: 12px; padding: 10px 8px; text-align: center; min-width: 0; }
+  .mv .h { font-size: 12px; color: var(--muted); }
+  .mv .r { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; margin: 2px 0; }
+  .mv .p { font-size: 12px; color: var(--muted); }
+  .chip { display: inline-block; font-size: 11px; font-weight: 800; letter-spacing: .6px; border-radius: 999px; padding: 2px 8px; margin-top: 6px; }
+  .chip.ALTO { background: var(--sell); color: #fff; } .chip.MEDIO { background: var(--wait); color: #1a1405; } .chip.BAJO { background: var(--line); color: var(--text); }
+  .pbar { height: 6px; background: var(--bg); border-radius: 3px; margin-top: 6px; overflow: hidden; } .pbar i { display: block; height: 6px; background: var(--gold); }
+  .dir { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .dir .act { font-size: 22px; font-weight: 800; }
+  .act.COMPRAR { color: var(--buy); } .act.VENDER { color: var(--sell); } .act.ESPERAR { color: var(--wait); }
+  table.pp { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+  table.pp td, table.pp th { padding: 5px 4px; border-top: 1px solid var(--line); text-align: right; } table.pp th { color: var(--muted); font-weight: 600; }
+  table.pp td:first-child, table.pp th:first-child { text-align: left; }
   footer { text-align: center; color: var(--muted); font-size: 12px; margin-top: 8px; }
 </style>
 </head>
 <body>
 <main>
   <header>
-    <div><h1><span>Cortés</span> · oro 15 min</h1><div class="src" id="src">Cargando…</div></div>
+    <div><h1><span>Cortés</span> · movimiento del oro</h1><div class="src" id="src">Cargando…</div></div>
     <div style="display:flex;gap:6px"><button id="refresh" aria-label="Actualizar">↻</button><button id="openSettings" aria-label="Ajustes">⚙︎</button></div>
   </header>
 
   <div class="card err" id="err"></div>
 
-  <div class="seg" id="tf">
-    <button data-m="1" class="on">Velas 1 min</button><button data-m="5">Velas 5 min</button>
-  </div>
-
-  <section class="card signal">
-    <div class="sub">Recomendación para los próximos 15 minutos</div>
-    <div class="act ESPERAR" id="act">—</div>
+  <section class="card">
+    <h2>Movimiento esperado</h2>
     <div class="price" id="price">—</div>
-    <div class="sub" id="reason">&nbsp;</div>
-    <div class="meter"><i id="needle" style="left:50%"></i></div>
-    <div class="meter-l"><span>Vender</span><span id="score">puntuación 0</span><span>Comprar</span></div>
-    <div class="levels">
-      <div>Volatilidad (ATR)<b id="atr">—</b></div>
-      <div>Stop orientativo<b id="stop">—</b></div>
-      <div>Objetivo orientativo<b id="target">—</b></div>
-    </div>
+    <div class="sub" id="moveNote">&nbsp;</div>
+    <div class="mv" id="mv"></div>
     <div class="sub" id="updated" style="margin-top:10px">&nbsp;</div>
-    <div class="sub" id="paramsLine">&nbsp;</div>
   </section>
 
-  <section class="card"><div id="chart"></div></section>
+  <section class="card"><div id="chart"></div><div class="sub">Líneas discontinuas: alejamiento típico en la próxima hora.</div></section>
 
   <section class="card">
-    <h2>Medidores</h2>
+    <h2>Ruptura de 1 h en papel</h2>
+    <p class="sub" style="margin:0 0 8px">Cuando una vela de 1 h cierra por encima del máximo (o por debajo del mínimo) de las 20 anteriores, a favor de la tendencia diaria, el servidor anota una operación ficticia y la cierra 4 h después, descontando 0,5 $ de spread. Es la única pista que dio el análisis y está sin confirmar: no es una recomendación.</p>
+    <div id="paper" class="sub">Cargando…</div>
+  </section>
+
+  <section class="card">
+    <h2>Dirección (solo informativa)</h2>
+    <div class="dir"><span class="act ESPERAR" id="act">—</span><span class="sub" id="reason"></span></div>
+    <p class="sub" style="margin:6px 0 4px">En 2 años de datos ninguna combinación de estos medidores predijo la dirección a 15 min, 1 h o 4 h mejor que el azar. Se muestran como contexto.</p>
+    <div class="sub" id="paramsLine">&nbsp;</div>
     <div id="meters"></div>
   </section>
 
-  <section class="card">
-    <h2>¿Cuánto ha acertado con estos datos?</h2>
-    <div class="bt">
-      <div><b id="btRate">—</b><span class="sub">llegó al objetivo</span></div>
-      <div><b id="btN">—</b><span class="sub">señales</span></div>
-      <div><b id="btBase">—</b><span class="sub">sin señal</span></div>
-    </div>
-    <p class="sub" id="btNote" style="margin:10px 0 0"></p>
-  </section>
-
-  <section class="card">
-    <h2>Optimizar ajustes</h2>
-    <p class="sub" style="margin:0 0 10px">Prueba 90 combinaciones de modo, exigencia, coincidencia y tendencia de 15 min con el histórico guardado (hasta 30 días, 23 h al día de lunes a viernes). Elige con los datos antiguos y comprueba con los recientes.</p>
-    <div style="display:flex;gap:8px;flex-wrap:wrap"><button id="optRun" class="primary">Buscar mejores ajustes</button><button id="optApply" hidden>Aplicar</button></div>
-    <div class="sub" id="optOut" style="margin-top:10px"></div>
-  </section>
-
   <section class="card warn">
-    <b>Aviso.</b> Esto no es asesoramiento financiero. Las señales salen de reglas técnicas simples y el movimiento del oro a 15 minutos es en gran parte ruido: ninguna combinación de indicadores lo predice de forma fiable. La app solo recomienda, nunca opera por ti. Úsala como apoyo y arriesga solo lo que puedas permitirte perder.
+    <b>Aviso.</b> Esto no es asesoramiento financiero. Cortés estima cuánto puede moverse el oro, no hacia dónde. La app nunca opera por ti. Arriesga solo lo que puedas permitirte perder.
   </section>
-  <footer>Datos cada 30 s · <span id="ver">v1</span></footer>
+  <footer>Datos cada 30 s · <span id="ver">v2</span></footer>
 </main>
 
 <dialog id="settings">
@@ -142,40 +136,42 @@
         <p class="sub">Crea una clave de <b>solo lectura</b> en eToro: Ajustes → Trading → API Key Management. Se guarda solo en este móvil.</p>
       </div>
     </div>
-    <label for="minMove">Movimiento mínimo esperado en 15 min ($)</label>
-    <input id="minMove" type="number" inputmode="decimal" min="0" step="0.5">
+    <label>Movimiento de referencia ($)</label>
+    <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px">
+      <div><label for="ref_m15" style="margin-top:0">15 min</label><input id="ref_m15" type="number" inputmode="decimal" min="1" step="1"></div>
+      <div><label for="ref_h1" style="margin-top:0">1 hora</label><input id="ref_h1" type="number" inputmode="decimal" min="1" step="1"></div>
+      <div><label for="ref_h4" style="margin-top:0">4 horas</label><input id="ref_h4" type="number" inputmode="decimal" min="1" step="1"></div>
+    </div>
+    <p class="sub">La app calcula la probabilidad de que el precio se aleje al menos esa cantidad del precio actual. Los avisos de ntfy usan 10 $ en 1 hora.</p>
+    <h2 style="margin-top:16px">Dirección (informativa)</h2>
     <label for="mode">Estrategia</label>
     <select id="mode">
       <option value="mixto">Mixto (todos los medidores votan)</option>
-      <option value="tendencia">Tendencia (EMA, MACD, impulso; RSI y Bollinger solo vetan extremos)</option>
-      <option value="rebote">Rebote (RSI, Bollinger, Estocástico; la tendencia solo veta)</option>
+      <option value="tendencia">Tendencia (EMA, MACD, impulso)</option>
+      <option value="rebote">Rebote (RSI, Bollinger, Estocástico)</option>
     </select>
-    <label for="threshold">Exigencia para dar señal</label>
+    <label for="threshold">Exigencia</label>
     <select id="threshold">
-      <option value="0.15">0,15 · baja (más señales, más fallos)</option>
-      <option value="0.2">0,20</option>
-      <option value="0.22">0,22 · media</option>
-      <option value="0.25">0,25</option>
-      <option value="0.3">0,30 · alta</option>
-      <option value="0.4">0,40 · muy alta (pocas señales)</option>
+      <option value="0.15">0,15</option><option value="0.2">0,20</option><option value="0.22">0,22</option>
+      <option value="0.25">0,25</option><option value="0.3">0,30</option><option value="0.4">0,40</option>
     </select>
     <label for="agree">Coincidencia mínima entre medidores</label>
-    <select id="agree">
-      <option value="0.5">50%</option><option value="0.6">60%</option><option value="0.75">75%</option>
-    </select>
+    <select id="agree"><option value="0.5">50%</option><option value="0.6">60%</option><option value="0.75">75%</option></select>
     <label class="chk"><input type="checkbox" id="htf"> Solo a favor de la tendencia de 15 min</label>
+    <input id="minMove" type="hidden">
     <div id="pinBox">
-      <label for="pin">PIN para cambiar ajustes</label>
+      <label for="pin">PIN para cambiar ajustes de dirección</label>
       <input id="pin" type="password" inputmode="numeric" autocomplete="off">
-      <p class="sub">Es el secreto ADMIN_PIN de Cloudflare. Los ajustes se guardan en tu servidor y los usan también los avisos de ntfy.</p>
+      <p class="sub">Es el secreto ADMIN_PIN de Cloudflare.</p>
     </div>
-    <label class="chk"><input type="checkbox" id="notify"> Avisarme cuando cambie la recomendación</label>
+    <label class="chk"><input type="checkbox" id="notify"> Avisarme en el móvil cuando el movimiento esperado pase a ALTO (con la app abierta)</label>
     <div class="actions"><button value="cancel">Cancelar</button><button value="ok" class="primary" id="save">Guardar</button></div>
   </form>
 </dialog>
 
 <script src="lwc.js"></script>
 <script src="indicators.js"></script>
+<script src="movement.js"></script>
 <script src="data.js"></script>
 <script src="app.js"></script>
 </body>

@@ -6,22 +6,12 @@ Web app (PWA) para Android que lee el histórico del oro (instrumento GOLD) desd
 
 ## Qué hace
 
-- Velas de 1 o 5 minutos (500 velas) de `GET /api/v1/market-data/instruments/{id}/history/candles/asc/{intervalo}/500` y precio bid/ask en vivo de `/market-data/instruments/rates`. Se actualiza cada 30 s (el límite de eToro es 120 peticiones/min).
-- Busca el id de GOLD con `/market-data/search?internalSymbolFull=GOLD`; si falla usa 18.
-- Medidores y peso en la votación:
-  | Medidor | Peso | Lógica |
-  |---|---|---|
-  | Tendencia EMA 9/21/50 | 1.5 | separación EMA9–EMA21 en ATRs + alineación de las tres |
-  | MACD 12/26/9 | 1.25 | nivel y pendiente del histograma |
-  | RSI 14 | 1 | >70 / <30 reversión; zona media sigue el impulso |
-  | Bollinger 20/2 | 1 | %B fuera de bandas = reversión |
-  | Estocástico 14/3 | 0.75 | cruces %K/%D en extremos |
-  | Impulso 5 velas | 0.75 | cambio de precio medido en ATRs |
-- Señal: media ponderada de votos en [-1, 1]. COMPRAR/VENDER si supera la exigencia (0.15 / 0.22 / 0.30) **y** al menos la mitad de los medidores coincide; ESPERAR si no, o si la volatilidad es demasiado baja.
-- Stop y objetivo orientativos: 1.0 y 1.2 × ATR × √(velas en 15 min).
-- Prueba histórica sobre las velas cargadas: porcentaje de señales en las que el precio fue en esa dirección 15 min después (ventanas sin solapar, sin spread).
-- Notificación opcional cuando cambia la recomendación (con la app abierta).
-- Fuente demo sin claves: PAXG/USDT de Binance (token respaldado por oro, sigue al XAU/USD).
+Un análisis de 2 años de XAU/USD de 1 minuto (Dukascopy, contrastado con eToro) no encontró ninguna regla técnica que prediga la **dirección** a 15 min, 1 h o 4 h mejor que el azar tras el spread. Lo que sí se puede prever es el **tamaño** del movimiento, a partir de la volatilidad (ATR) y la hora. Por eso Cortés es un indicador de movimiento:
+
+- Para 15 min, 1 h y 4 h muestra el alejamiento típico desde el precio actual, el rango esperado y la probabilidad de alejarse al menos una cantidad de referencia (5, 10 y 20 $ por defecto). Nivel BAJO (<30 %), MEDIO o ALTO (≥60 %).
+- Fórmula: ATR(14) × √(barras del horizonte) × ajuste horario (actividad típica por hora UTC), calibrado con los propios datos (mediana real/previsto y dispersión logarítmica). 15 min usa velas de 1 min; 1 h y 4 h, velas de 15 min.
+- **Ruptura de 1 h en papel**: cierre de 1 h por encima del máximo (o debajo del mínimo) de las 20 anteriores a favor de la tendencia diaria (cierre vs EMA 20 diaria). El servidor la anota y la cierra 4 h después, con 0,5 $ de spread. Es la única pista débil del análisis, sin confirmar.
+- La dirección (seis medidores: EMA, MACD, RSI, Bollinger, Estocástico, impulso) se muestra solo como información.
 
 ## Claves de eToro
 
@@ -57,12 +47,7 @@ npx wrangler deploy
 
 ## Avisos por ntfy
 
-Cada 15 minutos (`*/15 * * * *`, cron de Cloudflare) el Worker descarga las velas de 1 min de GOLD, calcula la recomendación con el mismo motor que la app y envía un aviso a ntfy cuando:
-
-- la recomendación es **COMPRAR** o **VENDER** (se repite cada 15 min mientras se mantenga), o
-- pasa de COMPRAR o VENDER a **ESPERAR**.
-
-Con ESPERAR seguido no avisa, y tampoco con el mercado cerrado (última vela de hace más de 20 min). Funciona con el móvil apagado. En el móvil instala la app ntfy y suscríbete al mismo tema. En ntfy.sh cualquiera que adivine el nombre del tema puede leerlo, así que elige uno difícil de adivinar.
+Cada 15 minutos (`*/15 * * * *`, cron de Cloudflare) el Worker descarga velas de 1 y 15 min de GOLD, calcula el movimiento esperado y avisa a ntfy cuando el nivel de la **próxima hora** pasa a ALTO (≥60 % de alejarse 10 $) y cuando deja de serlo. Con el mercado cerrado no avisa. Funciona con el móvil apagado. En el móvil instala la app ntfy y suscríbete al mismo tema. En ntfy.sh cualquiera que adivine el nombre del tema puede leerlo, así que elige uno difícil de adivinar.
 
 Solo se recomienda COMPRAR o VENDER si el recorrido probable en 15 min (ATR × √15) es de al menos `MIN_MOVE` dólares (5 por defecto, también ajustable en Ajustes de la app); el objetivo se fija a esa distancia como mínimo.
 
