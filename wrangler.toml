@@ -19,3 +19,4 @@ binding = "STATE"
 [vars]
 NTFY_SERVER = "https://ntfy.sh"
 THRESHOLD = "0.22"
+MIN_MOVE = "5"

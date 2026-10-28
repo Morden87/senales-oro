@@ -130,7 +130,7 @@
     } },
   ];
 
-  const DEFAULTS = { threshold: 0.22, minAtrPct: 0.006, horizon: 15 };
+  const DEFAULTS = { threshold: 0.22, minAtrPct: 0.006, horizon: 15, minMove: 5 };
 
   // Señal combinada para la vela i.
   function signalAt(I, i, opts = {}) {
@@ -152,27 +152,38 @@
     if (atrPct < o.minAtrPct) reason = 'Mercado demasiado quieto (volatilidad muy baja)';
     else if (score >= o.threshold && agree >= 0.5) { action = 'COMPRAR'; reason = 'Mayoría de medidores alcistas'; }
     else if (score <= -o.threshold && agree >= 0.5) { action = 'VENDER'; reason = 'Mayoría de medidores bajistas'; }
-    const dir = action === 'COMPRAR' ? 1 : action === 'VENDER' ? -1 : 0;
-    // Niveles orientativos escalados al horizonte (volatilidad ~ raíz del tiempo).
+    // Recorrido probable en el horizonte: la volatilidad crece con la raíz del tiempo.
     const hz = a * Math.sqrt(o.horizon);
+    if (action !== 'ESPERAR' && o.minMove > 0 && hz < o.minMove) {
+      reason = `${action === 'COMPRAR' ? 'Alcista' : 'Bajista'}, pero el recorrido probable (~${hz.toFixed(1)} $) no llega a ${o.minMove} $`;
+      action = 'ESPERAR';
+    }
+    const dir = action === 'COMPRAR' ? 1 : action === 'VENDER' ? -1 : 0;
     return {
-      action, score, agree, parts, reason, price, atr: a, atrPct,
-      stop: dir ? price - dir * hz * 1.0 : null, target: dir ? price + dir * hz * 1.2 : null,
+      action, score, agree, parts, reason, price, atr: a, atrPct, expectedMove: hz,
+      stop: dir ? price - dir * hz : null, target: dir ? price + dir * Math.max(o.minMove, hz * 1.2) : null,
     };
   }
 
-  // Prueba histórica sobre las velas cargadas: ¿acertó la dirección a N velas vista?
+  // Prueba histórica sobre las velas cargadas: ¿alcanzó el precio el objetivo mínimo dentro del horizonte?
   function backtest(I, opts = {}) {
-    const o = { ...DEFAULTS, ...opts }; const n = I.c.length; const H = o.horizonBars || o.horizon;
-    let hits = 0, total = 0, pnl = 0;
+    const o = { ...DEFAULTS, ...opts }; const n = I.c.length; const H = o.horizon;
+    let hits = 0, total = 0, pnl = 0, reach = 0, windows = 0;
+    for (let k = 60; k < n - H; k++) {
+      // Referencia sin señal: ¿con qué frecuencia el precio toca ±minMove por puro movimiento?
+      let up = -Infinity, dn = -Infinity;
+      for (let j = k + 1; j <= k + H; j++) { up = Math.max(up, I.h[j] - I.c[k]); dn = Math.max(dn, I.c[k] - I.l[j]); }
+      windows += 2; reach += (up >= o.minMove) + (dn >= o.minMove);
+    }
     for (let i = 60; i < n - H; i++) {
-      const fwd = I.c[i + H] - I.c[i];
       const s = signalAt(I, i, o); if (s.action === 'ESPERAR') continue;
       const dir = s.action === 'COMPRAR' ? 1 : -1;
-      total++; if (dir * fwd > 0) hits++; pnl += dir * fwd;
+      let best = -Infinity;
+      for (let j = i + 1; j <= i + H; j++) best = Math.max(best, dir > 0 ? I.h[j] - I.c[i] : I.c[i] - I.l[j]);
+      total++; if (best >= Math.max(o.minMove, 0)) hits++; pnl += dir * (I.c[i + H] - I.c[i]);
       i += H - 1; // no contar dos veces la misma ventana de 15 min
     }
-    return { total, hits, rate: total ? hits / total : NaN, avgMove: total ? pnl / total : NaN, bars: Math.max(0, n - H - 60) };
+    return { total, hits, rate: total ? hits / total : NaN, avgMove: total ? pnl / total : NaN, baseRate: windows ? reach / windows : NaN, bars: Math.max(0, n - H - 60) };
   }
 
   root.GoldTA = { sma, ema, rsi, macd, bollinger, atr, stochastic, computeAll, signalAt, backtest, METERS, DEFAULTS };

@@ -103,9 +103,9 @@
   <section class="card">
     <h2>¿Cuánto ha acertado con estos datos?</h2>
     <div class="bt">
-      <div><b id="btRate">—</b><span class="sub">aciertos</span></div>
+      <div><b id="btRate">—</b><span class="sub">llegó al objetivo</span></div>
       <div><b id="btN">—</b><span class="sub">señales</span></div>
-      <div><b id="btBase">—</b><span class="sub">acierto al azar</span></div>
+      <div><b id="btBase">—</b><span class="sub">sin señal</span></div>
     </div>
     <p class="sub" id="btNote" style="margin:10px 0 0"></p>
   </section>
@@ -134,6 +134,8 @@
         <p class="sub">Crea una clave de <b>solo lectura</b> en eToro: Ajustes → Trading → API Key Management. Se guarda solo en este móvil.</p>
       </div>
     </div>
+    <label for="minMove">Movimiento mínimo esperado en 15 min ($)</label>
+    <input id="minMove" type="number" inputmode="decimal" min="0" step="0.5">
     <label for="threshold">Exigencia para dar señal</label>
     <select id="threshold">
       <option value="0.15">Baja (más señales, más fallos)</option>

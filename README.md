@@ -55,6 +55,8 @@ Cada 15 minutos (`*/15 * * * *`, cron de Cloudflare) el Worker descarga las vela
 
 Con ESPERAR seguido no avisa, y tampoco con el mercado cerrado (última vela de hace más de 20 min). Funciona con el móvil apagado. En el móvil instala la app ntfy y suscríbete al mismo tema. En ntfy.sh cualquiera que adivine el nombre del tema puede leerlo, así que elige uno difícil de adivinar.
 
+Solo se recomienda COMPRAR o VENDER si el recorrido probable en 15 min (ATR × √15) es de al menos `MIN_MOVE` dólares (5 por defecto, también ajustable en Ajustes de la app); el objetivo se fija a esa distancia como mínimo.
+
 Opcional: `NTFY_SERVER` (en `[vars]`, por defecto https://ntfy.sh), el secreto `NTFY_TOKEN` si tu servidor pide autenticación, `APP_URL` para abrir la app al tocar el aviso y `THRESHOLD` para la exigencia (0.22 por defecto).
 
 Abre en Chrome de Android la URL `https://senales-oro.<tu-cuenta>.workers.dev` → menú ⋮ → **Añadir a pantalla de inicio**.

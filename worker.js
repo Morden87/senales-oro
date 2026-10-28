@@ -42,7 +42,7 @@ async function currentSignal(env) {
   // Con el mercado cerrado (fines de semana, pausa diaria) la última vela se queda vieja: no avisamos.
   if (Date.now() - candles[candles.length - 1].time > 20 * 60000) return null;
   const I = globalThis.GoldTA.computeAll(candles);
-  return globalThis.GoldTA.signalAt(I, candles.length - 1, { threshold: +(env.THRESHOLD || 0.22), horizon: 15 });
+  return globalThis.GoldTA.signalAt(I, candles.length - 1, { threshold: +(env.THRESHOLD || 0.22), minMove: +(env.MIN_MOVE || 5), horizon: 15 });
 }
 
 const fmt = (x) => (x == null ? '—' : x.toFixed(2));

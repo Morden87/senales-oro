@@ -7,7 +7,7 @@
     get() { try { return JSON.parse(localStorage.getItem('oro.cfg') || '{}'); } catch { return {}; } },
     set(v) { try { localStorage.setItem('oro.cfg', JSON.stringify(v)); } catch { /* sin almacenamiento */ } },
   };
-  const cfg = Object.assign({ source: 'etoro', apiKey: '', userKey: '', threshold: 0.22, enabled: TA.METERS.map((m) => m.id), notify: false, minutes: 1 }, store.get());
+  const cfg = Object.assign({ source: 'etoro', apiKey: '', userKey: '', threshold: 0.22, minMove: 5, enabled: TA.METERS.map((m) => m.id), notify: false, minutes: 1 }, store.get());
   cfg.proxy = false;
   let lastAction = null, timer = null, busy = false;
 
@@ -36,7 +36,7 @@
     if (candles.length < 80) throw new Error('Pocas velas recibidas (' + candles.length + '). El mercado puede estar cerrado.');
     const I = TA.computeAll(candles);
     const bars = HORIZON_MIN / cfg.minutes;
-    const opts = { threshold: +cfg.threshold, enabled: cfg.enabled, horizon: bars };
+    const opts = { threshold: +cfg.threshold, minMove: +cfg.minMove, enabled: cfg.enabled, horizon: bars };
     const i = candles.length - 1;
     const s = TA.signalAt(I, i, opts);
 
@@ -44,7 +44,7 @@
     const act = $('act'); act.textContent = s.action; act.className = 'act ' + s.action;
     const px = live && isFinite(live.bid) ? live.bid : s.price;
     $('price').textContent = '$' + fmt(px) + (live && isFinite(live.ask) ? '  ·  ask ' + fmt(live.ask) : '');
-    $('reason').textContent = s.reason + (s.agree != null ? ` · ${Math.round(s.agree * 100)}% de medidores de acuerdo` : '');
+    $('reason').textContent = s.reason + (s.expectedMove ? ` · recorrido probable ~${fmt(s.expectedMove, 1)} $` : '') + (s.agree != null ? ` · ${Math.round(s.agree * 100)}% de medidores de acuerdo` : '');
     $('needle').style.left = ((s.score + 1) / 2 * 100).toFixed(1) + '%';
     $('score').textContent = 'puntuación ' + (s.score >= 0 ? '+' : '') + s.score.toFixed(2);
     $('atr').textContent = fmt(s.atr) + ' (' + fmt(s.atrPct, 3) + '%)';
@@ -65,10 +65,10 @@
     const bt = TA.backtest(I, opts);
     $('btRate').textContent = isNaN(bt.rate) ? '—' : Math.round(bt.rate * 100) + '%';
     $('btN').textContent = bt.total;
-    $('btBase').textContent = '50%';
+    $('btBase').textContent = isNaN(bt.baseRate) ? '—' : Math.round(bt.baseRate * 100) + '%';
     $('btNote').textContent = bt.total
-      ? `En las últimas ${bt.bars} velas, cuando la app dijo comprar o vender, el precio ${HORIZON_MIN} min después fue en esa dirección el ${Math.round(bt.rate * 100)}% de las veces (movimiento medio ${bt.avgMove >= 0 ? '+' : ''}${fmt(bt.avgMove)} $, sin contar el spread de eToro). ${bt.total < 30 ? 'Son muy pocas señales para sacar conclusiones.' : 'Un acierto cercano al 50% equivale a lanzar una moneda, y el spread se come las ganancias pequeñas.'}`
-      : 'Todavía no hay señales en los datos cargados.';
+      ? `En las últimas ${bt.bars} velas, cuando la app dijo comprar o vender, el precio llegó a moverse ${cfg.minMove} $ a favor dentro de los ${HORIZON_MIN} min siguientes el ${Math.round(bt.rate * 100)}% de las veces. Sin hacer caso a ninguna señal, eso pasa el ${Math.round(bt.baseRate * 100)}% de las veces: la señal solo aporta algo si supera esa cifra. ${bt.total < 30 ? 'Son muy pocas señales para sacar conclusiones.' : ''}`
+      : `Todavía no hay señales con recorrido de ${cfg.minMove} $ en los datos cargados.`;
 
     candleS.setData(candles.map(({ time, open, high, low, close }) => ({ time, open, high, low, close })));
     e9.setData(line(candles, I.ema9)); e21.setData(line(candles, I.ema21));
@@ -104,7 +104,7 @@
   // ---------- ajustes ----------
   function syncSettingsUI() {
     $('source').value = cfg.source; $('apiKey').value = cfg.apiKey; $('userKey').value = cfg.userKey;
-    $('threshold').value = String(cfg.threshold); $('notify').checked = !!cfg.notify;
+    $('threshold').value = String(cfg.threshold); $('minMove').value = cfg.minMove; $('notify').checked = !!cfg.notify;
     $('etoroBox').style.display = cfg.source === 'etoro' ? '' : 'none';
     $('keysBox').style.display = cfg.proxy ? 'none' : '';
     $('proxyState').textContent = cfg.proxy ? 'Conectado a través de tu servidor: las claves están guardadas allí, no en el móvil.' : '';
@@ -118,7 +118,7 @@
     if ($('settings').returnValue !== 'ok') return;
     Object.assign(cfg, {
       source: $('source').value, apiKey: $('apiKey').value.trim(), userKey: $('userKey').value.trim(),
-      threshold: +$('threshold').value, notify: $('notify').checked,
+      threshold: +$('threshold').value, minMove: Math.max(0, +$('minMove').value || 0), notify: $('notify').checked,
       enabled: [...$('meterChecks').querySelectorAll('input:checked')].map((x) => x.value),
     });
     if (!cfg.enabled.length) cfg.enabled = TA.METERS.map((m) => m.id);
