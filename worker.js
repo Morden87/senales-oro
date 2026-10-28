@@ -60,7 +60,7 @@ async function ntfy(env, s, prev) {
     method: 'POST', headers,
     body: JSON.stringify({
       topic: env.NTFY_TOPIC,
-      title: changed ? 'Oro: ahora ESPERAR' : `Oro: ${s.action}`,
+      title: changed ? 'Cortés: oro, ahora ESPERAR' : `Cortés: ${s.action} oro`,
       message,
       tags: [changed ? 'pause_button' : s.action === 'COMPRAR' ? 'chart_with_upwards_trend' : 'chart_with_downwards_trend'],
       priority: changed ? 3 : 4,

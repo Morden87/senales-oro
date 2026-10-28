@@ -1,4 +1,4 @@
-# Señales Oro · 15 min
+# Cortés · señales del oro a 15 min
 
 Web app (PWA) para Android que lee el histórico del oro (instrumento GOLD) desde la API pública de eToro, calcula seis medidores técnicos y los combina en una recomendación de **COMPRAR**, **VENDER** o **ESPERAR** para los próximos 15 minutos.
 

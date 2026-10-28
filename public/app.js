@@ -83,8 +83,8 @@
     if (!cfg.notify || !('Notification' in window) || Notification.permission !== 'granted') return;
     const body = `${s.action} a $${fmt(s.price)} · ${s.reason}`;
     navigator.serviceWorker && navigator.serviceWorker.ready
-      .then((reg) => reg.showNotification('Oro: ' + s.action, { body, icon: 'icon-192.png', tag: 'oro' }))
-      .catch(() => new Notification('Oro: ' + s.action, { body }));
+      .then((reg) => reg.showNotification('Cortés: ' + s.action, { body, icon: 'icon-192.png', tag: 'oro' }))
+      .catch(() => new Notification('Cortés: ' + s.action, { body }));
     if (navigator.vibrate) navigator.vibrate(200);
   }
 
