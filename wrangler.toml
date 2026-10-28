@@ -1,0 +1,21 @@
+name = "senales-oro"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = ["/etoro/*"]
+
+# Comprobación y aviso por ntfy cada 15 minutos
+[triggers]
+crons = ["*/15 * * * *"]
+
+# Guarda la última recomendación para detectar el paso a ESPERAR.
+# Sin id: Cloudflare lo crea automáticamente en el primer despliegue.
+[[kv_namespaces]]
+binding = "STATE"
+
+[vars]
+NTFY_SERVER = "https://ntfy.sh"
+THRESHOLD = "0.22"

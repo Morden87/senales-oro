@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#14120d">
+<title>Señales Oro</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+  :root {
+    --bg: #14120d; --panel: #1d1a13; --panel2: #262218; --line: #3a3426;
+    --text: #f3ecd9; --muted: #a89f88; --gold: #e2b23c;
+    --buy: #2fbf71; --sell: #e5534b; --wait: #c9a227;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  body { padding: env(safe-area-inset-top) 0 calc(env(safe-area-inset-bottom) + 16px); }
+  main { max-width: 640px; margin: 0 auto; padding: 0 16px; }
+  header { display: flex; align-items: center; justify-content: space-between; padding: 14px 0 8px; gap: 8px; }
+  h1 { font-size: 18px; margin: 0; letter-spacing: .2px; }
+  h1 span { color: var(--gold); }
+  .src { font-size: 12px; color: var(--muted); }
+  button { font: inherit; color: var(--text); background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; }
+  button:active { transform: scale(.98); }
+  .seg { display: flex; gap: 6px; margin: 6px 0 12px; }
+  .seg button { flex: 1; padding: 7px 0; font-size: 14px; }
+  .seg button.on { background: var(--gold); color: #1a1405; border-color: var(--gold); font-weight: 600; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 16px; margin-bottom: 12px; }
+  .signal { text-align: center; }
+  .signal .act { font-size: 40px; font-weight: 800; letter-spacing: 1px; margin: 2px 0; }
+  .act.COMPRAR { color: var(--buy); } .act.VENDER { color: var(--sell); } .act.ESPERAR { color: var(--wait); }
+  .price { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .sub { color: var(--muted); font-size: 13px; }
+  .meter { position: relative; height: 10px; border-radius: 6px; margin: 14px 4px 6px;
+    background: linear-gradient(90deg, var(--sell), #6b5a2a 45%, #6b5a2a 55%, var(--buy)); }
+  .meter i { position: absolute; top: -5px; width: 4px; height: 20px; background: var(--text); border-radius: 2px; transform: translateX(-2px); transition: left .4s; }
+  .meter-l { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); }
+  .levels { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-top: 12px; }
+  .levels div { background: var(--panel2); border-radius: 10px; padding: 8px; font-size: 12px; color: var(--muted); }
+  .levels b { display: block; color: var(--text); font-size: 15px; font-variant-numeric: tabular-nums; }
+  #chart { height: 300px; margin: 0 -8px; }
+  .row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line); }
+  .row:first-child { border-top: 0; }
+  .row .n { flex: 1; min-width: 0; } .row .n small { display: block; color: var(--muted); font-size: 12px; }
+  .bar { width: 90px; height: 8px; background: var(--panel2); border-radius: 4px; position: relative; flex: none; }
+  .bar::after { content: ""; position: absolute; left: 50%; top: -2px; width: 1px; height: 12px; background: var(--line); }
+  .bar i { position: absolute; top: 0; height: 8px; border-radius: 4px; }
+  .tag { font-size: 12px; font-weight: 700; width: 64px; text-align: right; flex: none; }
+  .up { color: var(--buy); } .dn { color: var(--sell); } .nt { color: var(--muted); }
+  h2 { font-size: 14px; margin: 0 0 8px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .6px; }
+  .bt { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; text-align: center; }
+  .bt b { display: block; font-size: 20px; }
+  .warn { border-color: #5a4418; background: #221b0c; font-size: 13px; color: #e8d6a8; }
+  .err { border-color: #6a2622; background: #2a1312; color: #ffd3cf; font-size: 14px; display: none; }
+  dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 16px; width: min(560px, calc(100vw - 24px)); padding: 16px; }
+  dialog::backdrop { background: rgba(0,0,0,.6); }
+  label { display: block; margin: 12px 0 4px; font-size: 13px; color: var(--muted); }
+  input, select { width: 100%; font: inherit; color: var(--text); background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 9px 10px; }
+  .chk { display: flex; align-items: center; gap: 8px; margin: 6px 0; color: var(--text); font-size: 14px; }
+  .chk input { width: auto; }
+  .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+  .primary { background: var(--gold); color: #1a1405; border-color: var(--gold); font-weight: 700; }
+  footer { text-align: center; color: var(--muted); font-size: 12px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div><h1>Señales <span>Oro</span> · 15 min</h1><div class="src" id="src">Cargando…</div></div>
+    <div style="display:flex;gap:6px"><button id="refresh" aria-label="Actualizar">↻</button><button id="openSettings" aria-label="Ajustes">⚙︎</button></div>
+  </header>
+
+  <div class="card err" id="err"></div>
+
+  <div class="seg" id="tf">
+    <button data-m="1" class="on">Velas 1 min</button><button data-m="5">Velas 5 min</button>
+  </div>
+
+  <section class="card signal">
+    <div class="sub">Recomendación para los próximos 15 minutos</div>
+    <div class="act ESPERAR" id="act">—</div>
+    <div class="price" id="price">—</div>
+    <div class="sub" id="reason">&nbsp;</div>
+    <div class="meter"><i id="needle" style="left:50%"></i></div>
+    <div class="meter-l"><span>Vender</span><span id="score">puntuación 0</span><span>Comprar</span></div>
+    <div class="levels">
+      <div>Volatilidad (ATR)<b id="atr">—</b></div>
+      <div>Stop orientativo<b id="stop">—</b></div>
+      <div>Objetivo orientativo<b id="target">—</b></div>
+    </div>
+    <div class="sub" id="updated" style="margin-top:10px">&nbsp;</div>
+  </section>
+
+  <section class="card"><div id="chart"></div></section>
+
+  <section class="card">
+    <h2>Medidores</h2>
+    <div id="meters"></div>
+  </section>
+
+  <section class="card">
+    <h2>¿Cuánto ha acertado con estos datos?</h2>
+    <div class="bt">
+      <div><b id="btRate">—</b><span class="sub">aciertos</span></div>
+      <div><b id="btN">—</b><span class="sub">señales</span></div>
+      <div><b id="btBase">—</b><span class="sub">acierto al azar</span></div>
+    </div>
+    <p class="sub" id="btNote" style="margin:10px 0 0"></p>
+  </section>
+
+  <section class="card warn">
+    <b>Aviso.</b> Esto no es asesoramiento financiero. Las señales salen de reglas técnicas simples y el movimiento del oro a 15 minutos es en gran parte ruido: ninguna combinación de indicadores lo predice de forma fiable. La app solo recomienda, nunca opera por ti. Úsala como apoyo y arriesga solo lo que puedas permitirte perder.
+  </section>
+  <footer>Datos cada 30 s · <span id="ver">v1</span></footer>
+</main>
+
+<dialog id="settings">
+  <form method="dialog" id="form">
+    <h2>Ajustes</h2>
+    <label for="source">Fuente de datos</label>
+    <select id="source">
+      <option value="etoro">eToro (tu cuenta)</option>
+      <option value="paxg">Demo sin claves · PAXG (Binance)</option>
+    </select>
+    <div id="etoroBox">
+      <p class="sub" id="proxyState"></p>
+      <div id="keysBox">
+        <label for="apiKey">Public API Key (x-api-key)</label>
+        <input id="apiKey" autocomplete="off" spellcheck="false">
+        <label for="userKey">User Key (x-user-key)</label>
+        <input id="userKey" autocomplete="off" spellcheck="false">
+        <p class="sub">Crea una clave de <b>solo lectura</b> en eToro: Ajustes → Trading → API Key Management. Se guarda solo en este móvil.</p>
+      </div>
+    </div>
+    <label for="threshold">Exigencia para dar señal</label>
+    <select id="threshold">
+      <option value="0.15">Baja (más señales, más fallos)</option>
+      <option value="0.22">Media</option>
+      <option value="0.3">Alta (menos señales)</option>
+    </select>
+    <label>Medidores activos</label>
+    <div id="meterChecks"></div>
+    <label class="chk"><input type="checkbox" id="notify"> Avisarme cuando cambie la recomendación</label>
+    <div class="actions"><button value="cancel">Cancelar</button><button value="ok" class="primary" id="save">Guardar</button></div>
+  </form>
+</dialog>
+
+<script src="lwc.js"></script>
+<script src="indicators.js"></script>
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
