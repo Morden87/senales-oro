@@ -38,7 +38,7 @@ npx wrangler deploy
 
 ## Estrategias, histórico y optimizador
 
-- **Estrategia** (Ajustes): *Mixto* (votan los seis medidores), *Tendencia* (EMA, MACD e impulso deciden; RSI, Bollinger y Estocástico solo vetan extremos en contra) o *Rebote* (al revés).
+- **Estrategia** (Ajustes): *Tendencia* (por defecto) (EMA, MACD e impulso deciden; RSI, Bollinger y Estocástico solo vetan extremos en contra) , *Mixto* (votan los seis medidores) o *Rebote* (al revés).
 - **Coincidencia mínima** entre medidores (50/60/75 %) y filtro opcional **a favor de la tendencia de 15 min** (EMA 9/21 sobre velas de 15 min ya cerradas).
 - Las señales se calculan siempre con la **última vela cerrada**.
 - Sin filtro de horario: se trabaja las ~23 h diarias de lunes a viernes en que cotiza el oro. Los huecos (pausa diaria, fin de semana) se excluyen de la prueba histórica.

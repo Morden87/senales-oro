@@ -151,7 +151,7 @@
 
   // Parámetros del motor. mode: 'mixto' (todos los medidores), 'tendencia' (EMA, MACD, impulso;
   // RSI/Bollinger/Estocástico solo vetan extremos en contra) o 'rebote' (al revés).
-  const DEFAULTS = { mode: 'mixto', threshold: 0.22, agree: 0.5, htf: false, minMove: 5, minAtrPct: 0.006, horizon: 15 };
+  const DEFAULTS = { mode: 'tendencia', threshold: 0.22, agree: 0.5, htf: false, minMove: 5, minAtrPct: 0.006, horizon: 15 };
   const MODES = { mixto: 'Mixto', tendencia: 'Tendencia', rebote: 'Rebote' };
 
   function familyScore(parts, fam) {
