@@ -73,11 +73,10 @@
 
   function renderDirection(c1) {
     const I = TA.computeAll(c1);
-    let i = c1.length - 1; if (c1[i].time + 60 > Date.now() / 1000) i--;
-    const s = TA.signalAt(I, i, { ...params, minMove: 0, horizon: 15 });
+    const s = TA.stableSignal(slow.c15, params);
     const act = $('act'); act.textContent = s.action; act.className = 'act ' + s.action;
-    $('reason').textContent = s.reason;
-    $('paramsLine').textContent = 'Ajustes: ' + paramsText(params);
+    $('reason').textContent = s.reason + (s.action !== 'ESPERAR' && s.since ? ` (desde las ${hhmm(s.since)})` : '');
+    $('paramsLine').textContent = 'Velas de 15 min cerradas · ' + paramsText(params);
     $('meters').innerHTML = s.parts.map((p) => {
       const w = Math.abs(p.v) * 45, left = p.v >= 0 ? 50 : 50 - w;
       const cls = p.v > 0.1 ? 'up' : p.v < -0.1 ? 'dn' : 'nt';

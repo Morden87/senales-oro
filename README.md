@@ -11,7 +11,7 @@ Un análisis de 2 años de XAU/USD de 1 minuto (Dukascopy, contrastado con eToro
 - Para 15 min, 1 h y 4 h muestra el alejamiento típico desde el precio actual, el rango esperado y la probabilidad de alejarse al menos una cantidad de referencia (5, 10 y 20 $ por defecto). Nivel BAJO (<30 %), MEDIO o ALTO (≥60 %).
 - Fórmula: ATR(14) × √(barras del horizonte) × ajuste horario (actividad típica por hora UTC), calibrado con los propios datos (mediana real/previsto y dispersión logarítmica). 15 min usa velas de 1 min; 1 h y 4 h, velas de 15 min.
 - **Ruptura de 1 h en papel**: cierre de 1 h por encima del máximo (o debajo del mínimo) de las 20 anteriores a favor de la tendencia diaria (cierre vs EMA 20 diaria). El servidor la anota y la cierra 4 h después, con 0,5 $ de spread. Es la única pista débil del análisis, sin confirmar.
-- La dirección (seis medidores: EMA, MACD, RSI, Bollinger, Estocástico, impulso) se muestra solo como información.
+- La recomendación (seis medidores: EMA, MACD, RSI, Bollinger, Estocástico, impulso) se calcula con velas de 15 min cerradas en modo tendencia. Solo da COMPRAR o VENDER si la señal se mantiene 2 velas seguidas (30 min), la tendencia de 1 h (EMA 9/21 y pendiente de la EMA 21) va a favor y el precio no está a más de 3 ATR de su EMA 21 (para no entrar tarde). Indica si la tendencia está recién empezada, en curso o avanzada. Es solo informativa.
 
 ## Claves de eToro
 

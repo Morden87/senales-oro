@@ -184,7 +184,7 @@
     if (atrPct < o.minAtrPct) reason = 'Mercado demasiado quieto (volatilidad muy baja)';
     else if (!want) reason = 'Los medidores no coinciden lo suficiente';
     else if (agree < o.agree) reason = `${word}, pero solo coincide el ${Math.round(agree * 100)}% de los medidores`;
-    else if (main && other * want < -0.5) reason = `${word}, pero ${main === 'trend' ? 'en sobrecompra/sobreventa' : 'la tendencia va en contra'}`;
+    else if (main && o.veto !== false && other * want < -0.5) reason = `${word}, pero ${main === 'trend' ? 'en sobrecompra/sobreventa' : 'la tendencia va en contra'}`;
     else if (o.htf && I.htf && I.htf[i] !== want) reason = `${word}, pero la tendencia de 15 min no acompaña`;
     else if (o.minMove > 0 && hz < o.minMove) reason = `${word}, pero el recorrido probable (~${hz.toFixed(1)} $) no llega a ${o.minMove} $`;
     else { action = want > 0 ? 'COMPRAR' : 'VENDER'; reason = want > 0 ? 'Mayoría de medidores alcistas' : 'Mayoría de medidores bajistas'; }
@@ -243,5 +243,48 @@
     return { best, current, candles: n, trainBars: cut, testBars: n - cut, tried: grid.length };
   }
 
-  root.GoldTA = { sma, ema, rsi, macd, bollinger, atr, stochastic, computeAll, signalAt, backtest, optimize, METERS, DEFAULTS, MODES };
+  // Recomendación estable sobre velas de 15 min ya cerradas: la señal debe repetirse en las
+  // últimas `hold` velas (45 min por defecto) y la tendencia de 1 h (EMA 9/21 y pendiente de la
+  // EMA 21, solo con horas cerradas) debe ir en la misma dirección.
+  function hourlyTrend(c15) {
+    const hours = [];
+    for (const k of c15) {
+      const b = Math.floor(k.time / 3600);
+      if (hours.length && hours[hours.length - 1].b === b) hours[hours.length - 1].close = k.close;
+      else hours.push({ b, close: k.close });
+    }
+    const last = c15[c15.length - 1];
+    // La hora en curso solo cuenta si su última vela de 15 min ya cerró la hora.
+    if (hours.length && (last.time + 900) % 3600 !== 0) hours.pop();
+    const c = hours.map((h) => h.close), f = ema(c, 9), sl = ema(c, 21), n = c.length - 1;
+    if (n < 24 || isNaN(f[n]) || isNaN(sl[n - 3])) return { dir: 0, txt: 'pocas horas de datos' };
+    const up = f[n] > sl[n] && sl[n] > sl[n - 3], dn = f[n] < sl[n] && sl[n] < sl[n - 3];
+    return { dir: up ? 1 : dn ? -1 : 0, txt: `EMA9 ${f[n] > sl[n] ? '>' : '<'} EMA21 · EMA21 ${sl[n] > sl[n - 3] ? 'subiendo' : 'bajando'} (3 h)` };
+  }
+
+  function stableSignal(c15, opts = {}) {
+    const o = { ...DEFAULTS, ...opts, mode: 'tendencia', veto: false, minMove: 0, horizon: 4 };
+    const hold = opts.hold || 2;
+    if (!c15 || c15.length < 80) return { action: 'ESPERAR', parts: [], reason: 'Cargando velas de 15 min…' };
+    const I = computeAll(c15), n = c15.length - 1;
+    const sigs = []; for (let i = n - hold + 1; i <= n; i++) sigs.push(signalAt(I, i, o));
+    const s = sigs[sigs.length - 1], h = hourlyTrend(c15);
+    const dir = (a) => (a === 'COMPRAR' ? 1 : a === 'VENDER' ? -1 : 0);
+    const want = dir(s.action), word = want > 0 ? 'Alcista' : 'Bajista';
+    // Cuántas velas seguidas lleva la misma señal.
+    let run = 0; for (let i = n; i >= 60 && run < 96 && dir(signalAt(I, i, o).action) === want && want; i--) run++;
+    const out = { ...s, hourly: h, run, since: run ? c15[n - run + 1].time : null };
+    out.parts = [...s.parts, { id: 'h1', name: 'Tendencia de 1 h', family: 'trend', weight: 0, v: h.dir * 0.8, txt: h.txt }];
+    if (!want) return { ...out, action: 'ESPERAR', reason: s.reason };
+    if (!sigs.every((x) => dir(x.action) === want)) return { ...out, action: 'ESPERAR', reason: `${word} en 15 min, pero aún no se ha mantenido ${hold * 15} min` };
+    if (h.dir !== want) return { ...out, action: 'ESPERAR', reason: `${word} en 15 min, pero la tendencia de 1 h no acompaña` };
+    // Para no llegar tarde: cuánto se ha alejado ya el precio de su EMA 21 de 15 min, en ATR.
+    const ext = (I.c[n] - I.ema21[n]) / I.atr[n] * want;
+    out.extension = ext;
+    if (ext > 3) return { ...out, action: 'ESPERAR', reason: `${word}, pero el precio ya está muy estirado (${ext.toFixed(1)} ATR de su media): riesgo de llegar tarde` };
+    const stage = run <= 4 ? 'recién empezada' : run <= 12 ? 'en curso' : 'avanzada, ojo con llegar tarde';
+    return { ...out, stage, reason: `${word} en 15 min y en 1 h · tendencia ${stage} (${run * 15} min)` };
+  }
+
+  root.GoldTA = { sma, ema, rsi, macd, bollinger, atr, stochastic, computeAll, signalAt, stableSignal, hourlyTrend, backtest, optimize, METERS, DEFAULTS, MODES };
 })(typeof window !== 'undefined' ? window : globalThis);
