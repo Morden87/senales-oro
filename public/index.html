@@ -72,6 +72,8 @@
   .pbar { height: 6px; background: var(--bg); border-radius: 3px; margin-top: 6px; overflow: hidden; } .pbar i { display: block; height: 6px; background: var(--gold); }
   .dir { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
   .dir .act { font-size: 22px; font-weight: 800; }
+  .rec .dir { flex-direction: column; align-items: center; text-align: center; gap: 2px; }
+  .rec .dir .act { font-size: 40px; letter-spacing: 1px; }
   .act.COMPRAR { color: var(--buy); } .act.VENDER { color: var(--sell); } .act.ESPERAR { color: var(--wait); }
   table.pp { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
   table.pp td, table.pp th { padding: 5px 4px; border-top: 1px solid var(--line); text-align: right; } table.pp th { color: var(--muted); font-weight: 600; }
@@ -87,6 +89,14 @@
   </header>
 
   <div class="card err" id="err"></div>
+
+  <section class="card rec">
+    <h2>Recomendación</h2>
+    <div class="dir"><span class="act ESPERAR" id="act">—</span><span class="sub" id="reason"></span></div>
+    <p class="sub" style="margin:6px 0 4px">En 2 años de datos ninguna combinación de estos medidores predijo la dirección a 15 min, 1 h o 4 h mejor que el azar. Tómala como contexto, no como predicción.</p>
+    <div class="sub" id="paramsLine">&nbsp;</div>
+    <div id="meters"></div>
+  </section>
 
   <section class="card">
     <h2>Movimiento esperado</h2>
@@ -104,13 +114,6 @@
     <div id="paper" class="sub">Cargando…</div>
   </section>
 
-  <section class="card">
-    <h2>Dirección (solo informativa)</h2>
-    <div class="dir"><span class="act ESPERAR" id="act">—</span><span class="sub" id="reason"></span></div>
-    <p class="sub" style="margin:6px 0 4px">En 2 años de datos ninguna combinación de estos medidores predijo la dirección a 15 min, 1 h o 4 h mejor que el azar. Se muestran como contexto.</p>
-    <div class="sub" id="paramsLine">&nbsp;</div>
-    <div id="meters"></div>
-  </section>
 
   <section class="card warn">
     <b>Aviso.</b> Esto no es asesoramiento financiero. Cortés estima cuánto puede moverse el oro, no hacia dónde. La app nunca opera por ti. Arriesga solo lo que puedas permitirte perder.
