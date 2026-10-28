@@ -31,7 +31,7 @@ eToro → Ajustes → Trading → API Key Management → Create New Key. Elige e
 
 1. Sube este proyecto a un repositorio de GitHub.
 2. Cloudflare → Workers & Pages → Create → Import a repository → elige el repositorio → Deploy.
-3. En el Worker → Settings → Variables and Secrets añade como *Secret* `ETORO_API_KEY`, `ETORO_USER_KEY` y `NTFY_TOPIC` (el nombre de tu canal de ntfy).
+3. En el Worker → Settings → Variables and Secrets añade como *Secret* `ETORO_API_KEY`, `ETORO_USER_KEY`, `NTFY_TOPIC` (el nombre de tu canal de ntfy) y `ADMIN_PIN` (un PIN para cambiar los ajustes desde la app).
 4. Abre `https://senales-oro.<tu-subdominio>.workers.dev` en Chrome → ⋮ → Añadir a pantalla de inicio.
 
 ## Publicarla desde un ordenador
@@ -45,6 +45,15 @@ npx wrangler secret put ETORO_API_KEY   # pega la Public API Key
 npx wrangler secret put ETORO_USER_KEY  # pega la User Key
 npx wrangler deploy
 ```
+
+## Estrategias, histórico y optimizador
+
+- **Estrategia** (Ajustes): *Mixto* (votan los seis medidores), *Tendencia* (EMA, MACD e impulso deciden; RSI, Bollinger y Estocástico solo vetan extremos en contra) o *Rebote* (al revés).
+- **Coincidencia mínima** entre medidores (50/60/75 %) y filtro opcional **a favor de la tendencia de 15 min** (EMA 9/21 sobre velas de 15 min ya cerradas).
+- Las señales se calculan siempre con la **última vela cerrada**.
+- Sin filtro de horario: se trabaja las ~23 h diarias de lunes a viernes en que cotiza el oro. Los huecos (pausa diaria, fin de semana) se excluyen de la prueba histórica.
+- Cada 15 min el servidor guarda las velas de 1 min en KV (una clave por día, 30 días). `GET /api/history?days=N` las devuelve.
+- **Optimizador** (botón en la app): prueba 90 combinaciones con el 70 % más antiguo del histórico y las valida con el 30 % más reciente. Solo recomienda aplicar si también mejora en esa parte no vista. Al aplicar, los ajustes se guardan en el servidor (`POST /api/params`, cabecera `x-admin-pin`) y los usan la app y los avisos.
 
 ## Avisos por ntfy
 

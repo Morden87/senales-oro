@@ -46,7 +46,7 @@
     return 18; // id histórico de GOLD en eToro, por si la búsqueda falla
   }
 
-  async function etoroCandles(cfg, minutes, count = 500) {
+  async function etoroCandles(cfg, minutes, count = 1000) {
     const id = await resolveGoldId(cfg); cfg.instrumentId = id;
     const j = await etoroGet(cfg, `/api/v1/market-data/instruments/${id}/history/candles/asc/${INTERVALS[minutes]}/${count}`);
     const raw = (j.candles && j.candles[0] && j.candles[0].candles) || [];
@@ -63,7 +63,7 @@
     return { candles, live, label: `eToro · GOLD (id ${id})` };
   }
 
-  async function paxgCandles(minutes, count = 500) {
+  async function paxgCandles(minutes, count = 1000) {
     const r = await fetch(`https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=${minutes}m&limit=${count}`, { cache: 'no-store' });
     if (!r.ok) throw new ApiError('Binance respondió ' + r.status, 'http');
     const j = await r.json();

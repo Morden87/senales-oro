@@ -7,9 +7,27 @@
     get() { try { return JSON.parse(localStorage.getItem('oro.cfg') || '{}'); } catch { return {}; } },
     set(v) { try { localStorage.setItem('oro.cfg', JSON.stringify(v)); } catch { /* sin almacenamiento */ } },
   };
-  const cfg = Object.assign({ source: 'etoro', apiKey: '', userKey: '', threshold: 0.22, minMove: 5, enabled: TA.METERS.map((m) => m.id), notify: false, minutes: 1 }, store.get());
+  const cfg = Object.assign({ source: 'etoro', apiKey: '', userKey: '', pin: '', notify: false, minutes: 1 }, store.get());
   cfg.proxy = false;
-  let lastAction = null, timer = null, busy = false;
+  // Parámetros del motor. Con servidor, la fuente de verdad son los guardados allí (los mismos que usan los avisos).
+  const PARAM_KEYS = ['mode', 'threshold', 'agree', 'htf', 'minMove'];
+  const pick = (o) => Object.fromEntries(PARAM_KEYS.filter((k) => o && o[k] !== undefined).map((k) => [k, o[k]]));
+  let params = { ...pick(TA.DEFAULTS), ...pick(cfg.params) };
+  let lastAction = null, timer = null, busy = false, lastCandles = null;
+  const save = () => { const { proxy, ...persist } = cfg; persist.params = params; store.set(persist); };
+  const paramsText = (p) => `${TA.MODES[p.mode] || p.mode} · exigencia ${(+p.threshold).toFixed(2)} · coincidencia ${Math.round(p.agree * 100)}%` +
+    `${p.htf ? ' · con tendencia 15 min' : ''} · mínimo ${p.minMove} $`;
+  async function loadServerParams() {
+    try { const r = await fetch('api/params', { cache: 'no-store' }); if (r.ok) { params = { ...params, ...pick(await r.json()) }; save(); } } catch { /* sin conexión */ }
+  }
+  async function pushServerParams(p, note) {
+    if (!cfg.proxy) { params = { ...params, ...pick(p) }; save(); return; }
+    if (!cfg.pin) throw new Error('Escribe tu PIN en Ajustes para cambiar los ajustes de la app y de los avisos.');
+    const r = await fetch('api/params', { method: 'POST', headers: { 'content-type': 'application/json', 'x-admin-pin': cfg.pin }, body: JSON.stringify({ ...pick(p), note }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || 'El servidor respondió ' + r.status);
+    params = { ...params, ...pick(j) }; save();
+  }
 
   // ---------- gráfico ----------
   const chart = LightweightCharts.createChart($('chart'), {
@@ -36,8 +54,13 @@
     if (candles.length < 80) throw new Error('Pocas velas recibidas (' + candles.length + '). El mercado puede estar cerrado.');
     const I = TA.computeAll(candles);
     const bars = HORIZON_MIN / cfg.minutes;
-    const opts = { threshold: +cfg.threshold, minMove: +cfg.minMove, enabled: cfg.enabled, horizon: bars };
-    const i = candles.length - 1;
+    const opts = { ...params, horizon: bars };
+    // Se decide con la última vela cerrada; la más reciente puede estar todavía formándose.
+    const now = Date.now() / 1000;
+    let i = candles.length - 1;
+    if (candles[i].time + cfg.minutes * 60 > now) i--;
+    if (cfg.minutes === 1) lastCandles = candles;
+    $('paramsLine').textContent = 'Ajustes: ' + paramsText(params);
     const s = TA.signalAt(I, i, opts);
 
     $('src').textContent = label;
@@ -67,8 +90,8 @@
     $('btN').textContent = bt.total;
     $('btBase').textContent = isNaN(bt.baseRate) ? '—' : Math.round(bt.baseRate * 100) + '%';
     $('btNote').textContent = bt.total
-      ? `En las últimas ${bt.bars} velas, cuando la app dijo comprar o vender, el precio llegó a moverse ${cfg.minMove} $ a favor dentro de los ${HORIZON_MIN} min siguientes el ${Math.round(bt.rate * 100)}% de las veces. Sin hacer caso a ninguna señal, eso pasa el ${Math.round(bt.baseRate * 100)}% de las veces: la señal solo aporta algo si supera esa cifra. ${bt.total < 30 ? 'Son muy pocas señales para sacar conclusiones.' : ''}`
-      : `Todavía no hay señales con recorrido de ${cfg.minMove} $ en los datos cargados.`;
+      ? `En las últimas ${bt.bars} velas, cuando la app dijo comprar o vender, el precio llegó a moverse ${params.minMove} $ a favor dentro de los ${HORIZON_MIN} min siguientes el ${Math.round(bt.rate * 100)}% de las veces. Sin hacer caso a ninguna señal, eso pasa el ${Math.round(bt.baseRate * 100)}% de las veces: la señal solo aporta algo si supera esa cifra. ${bt.total < 30 ? 'Son muy pocas señales para sacar conclusiones.' : ''}`
+      : `Todavía no hay señales con recorrido de ${params.minMove} $ en los datos cargados.`;
 
     candleS.setData(candles.map(({ time, open, high, low, close }) => ({ time, open, high, low, close })));
     e9.setData(line(candles, I.ema9)); e21.setData(line(candles, I.ema21));
@@ -104,12 +127,12 @@
   // ---------- ajustes ----------
   function syncSettingsUI() {
     $('source').value = cfg.source; $('apiKey').value = cfg.apiKey; $('userKey').value = cfg.userKey;
-    $('threshold').value = String(cfg.threshold); $('minMove').value = cfg.minMove; $('notify').checked = !!cfg.notify;
+    $('mode').value = params.mode; $('threshold').value = String(params.threshold); $('agree').value = String(params.agree);
+    $('htf').checked = !!params.htf; $('minMove').value = params.minMove; $('pin').value = cfg.pin; $('notify').checked = !!cfg.notify;
+    $('pinBox').style.display = cfg.proxy ? '' : 'none';
     $('etoroBox').style.display = cfg.source === 'etoro' ? '' : 'none';
     $('keysBox').style.display = cfg.proxy ? 'none' : '';
     $('proxyState').textContent = cfg.proxy ? 'Conectado a través de tu servidor: las claves están guardadas allí, no en el móvil.' : '';
-    $('meterChecks').innerHTML = TA.METERS.map((m) =>
-      `<label class="chk"><input type="checkbox" value="${m.id}" ${cfg.enabled.includes(m.id) ? 'checked' : ''}> ${m.name}</label>`).join('');
   }
   function openSettings() { syncSettingsUI(); $('settings').showModal(); }
   $('source').addEventListener('change', () => { $('etoroBox').style.display = $('source').value === 'etoro' ? '' : 'none'; });
@@ -118,12 +141,15 @@
     if ($('settings').returnValue !== 'ok') return;
     Object.assign(cfg, {
       source: $('source').value, apiKey: $('apiKey').value.trim(), userKey: $('userKey').value.trim(),
-      threshold: +$('threshold').value, minMove: Math.max(0, +$('minMove').value || 0), notify: $('notify').checked,
-      enabled: [...$('meterChecks').querySelectorAll('input:checked')].map((x) => x.value),
+      pin: $('pin').value.trim(), notify: $('notify').checked,
     });
-    if (!cfg.enabled.length) cfg.enabled = TA.METERS.map((m) => m.id);
     delete cfg.instrumentId;
-    const { proxy, ...persist } = cfg; store.set(persist);
+    const next = { mode: $('mode').value, threshold: +$('threshold').value, agree: +$('agree').value,
+      htf: $('htf').checked, minMove: Math.max(0, +$('minMove').value || 0) };
+    save();
+    if (JSON.stringify(pick(next)) !== JSON.stringify(pick(params))) {
+      try { await pushServerParams(next, 'manual'); } catch (e) { showError(e.message); }
+    }
     if (cfg.notify && 'Notification' in window && Notification.permission === 'default') await Notification.requestPermission();
     lastAction = null; fitted = false; refresh();
   });
@@ -131,16 +157,64 @@
   $('tf').addEventListener('click', (ev) => {
     const b = ev.target.closest('button'); if (!b) return;
     cfg.minutes = +b.dataset.m; [...$('tf').children].forEach((x) => x.classList.toggle('on', x === b));
-    const { proxy, ...persist } = cfg; store.set(persist); fitted = false; lastAction = null; refresh();
+    save(); fitted = false; lastAction = null; refresh();
   });
   $('refresh').addEventListener('click', refresh);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+
+  // ---------- optimizador ----------
+  let proposal = null;
+  async function historyCandles() {
+    let rows = [];
+    if (cfg.proxy) {
+      try { const r = await fetch('api/history?days=30', { cache: 'no-store' }); if (r.ok) rows = (await r.json()).candles || []; } catch { /* sin histórico */ }
+    }
+    const byTime = new Map(rows.map((k) => [k[0], { time: k[0], open: k[1], high: k[2], low: k[3], close: k[4] }]));
+    for (const k of lastCandles || []) byTime.set(k.time, k);
+    const now = Date.now() / 1000;
+    return [...byTime.values()].filter((k) => k.time + 60 <= now).sort((a, b) => a.time - b.time);
+  }
+  const pct = (x) => (isNaN(x) ? '—' : Math.round(x * 100) + '%');
+  const stat = (b) => `${b.hits}/${b.total} (${pct(b.rate)}) vs ${pct(b.baseRate)} sin señal`;
+  $('optRun').addEventListener('click', async () => {
+    const btn = $('optRun'); btn.disabled = true; $('optApply').hidden = true; proposal = null;
+    try {
+      if (!lastCandles) throw new Error('Abre primero las velas de 1 min para cargar datos.');
+      $('optOut').textContent = 'Cargando histórico…';
+      const candles = await historyCandles();
+      const days = (candles[candles.length - 1].time - candles[0].time) / 86400;
+      const r = await TA.optimize(candles, { ...params, horizon: 15 }, (f) => { $('optOut').textContent = `Probando combinaciones… ${Math.round(f * 100)}%`; });
+      let html = `<p>${candles.length.toLocaleString('es-ES')} velas (${days.toFixed(1)} días). ${r.tried} combinaciones probadas con el 70% más antiguo y validadas con el 30% más reciente.</p>`;
+      html += `<p><b>Ajustes actuales</b> · ${paramsText(params)}<br>Validación: ${stat(r.current.test)}</p>`;
+      if (!r.best) html += '<p>No hay suficientes señales para comparar. Vuelve a intentarlo cuando el servidor haya guardado más días.</p>';
+      else {
+        const better = r.best.test.total >= 5 && r.best.test.rate - r.best.test.baseRate > r.current.test.rate - r.current.test.baseRate;
+        html += `<p><b>Mejor combinación</b> · ${paramsText(r.best.p)}<br>Aprendizaje: ${stat(r.best.train)}<br>Validación: ${stat(r.best.test)}</p>`;
+        html += better
+          ? '<p>Mejora también en los datos que no había visto. Puedes aplicarla.</p>'
+          : '<p>No mejora a los ajustes actuales en los datos que no había visto, así que no la recomiendo.</p>';
+        if (r.best.test.total < 20) html += `<p>Con solo ${r.best.test.total} señales de validación el resultado todavía es poco fiable.</p>`;
+        proposal = r.best.p; $('optApply').hidden = false; $('optApply').textContent = better ? 'Aplicar a la app y a los avisos' : 'Aplicar de todos modos';
+      }
+      $('optOut').innerHTML = html;
+    } catch (e) { $('optOut').textContent = e.message; }
+    finally { btn.disabled = false; }
+  });
+  $('optApply').addEventListener('click', async () => {
+    if (!proposal) return;
+    try {
+      await pushServerParams(proposal, 'optimizador');
+      $('optApply').hidden = true; $('optOut').insertAdjacentHTML('beforeend', '<p><b>Aplicado.</b> Los avisos de ntfy usarán estos ajustes desde el próximo cuarto de hora.</p>');
+      lastAction = null; refresh();
+    } catch (e) { showError(e.message); }
+  });
 
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 
   (async function init() {
     [...$('tf').children].forEach((x) => x.classList.toggle('on', +x.dataset.m === cfg.minutes));
     cfg.proxy = await Data.detectProxy();
+    if (cfg.proxy) await loadServerParams();
     if (cfg.source === 'etoro' && !cfg.proxy && !(cfg.apiKey && cfg.userKey)) {
       showError('Para usar tu cuenta de eToro añade tus claves en Ajustes, o elige la fuente demo.');
       openSettings(); return schedule();
