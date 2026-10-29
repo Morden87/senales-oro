@@ -119,8 +119,11 @@ async function movementAlert(env, c1, c15) {
   if (now !== prev) await env.STATE.put('moveLevel', now);
   if (!env.NTFY_TOPIC || (now === 'ALTO') === (prev === 'ALTO')) return `${prev} -> ${now}`;
   const lines = f.map((x) => `${x.label}: rango ~${fmt(x.range, 0)} $ · ${pct(x.prob)} de alejarse ≥${x.ref} $`).join('\n');
+  // La dirección la da la recomendación de la app (velas de 15 min y tendencia de 1 h), solo como contexto.
+  let rec = '';
+  try { const r = globalThis.GoldTA.stableSignal(c15, await getParams(env)); rec = `\nRecomendación ahora: ${r.action} (${r.reason}).`; } catch { /* sin recomendación */ }
   await ntfy(env, now === 'ALTO'
-    ? { title: 'Cortés: se espera mucho movimiento en el oro', message: `Precio ${fmt(h1.price)} $.\n${lines}\nIndica tamaño, no dirección.`, tags: ['zap'], priority: 4 }
+    ? { title: 'Cortés: se espera mucho movimiento en el oro', message: `Precio ${fmt(h1.price)} $.\n${lines}\nEste aviso indica tamaño, no dirección: puede ser hacia arriba o hacia abajo.${rec}`, tags: ['zap'], priority: 4 }
     : { title: 'Cortés: el oro se calma', message: `Precio ${fmt(h1.price)} $.\n${lines}`, tags: ['zzz'], priority: 2 });
   return `${prev} -> ${now} (aviso enviado)`;
 }
