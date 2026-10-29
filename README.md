@@ -47,7 +47,7 @@ npx wrangler deploy
 
 ## Avisos por ntfy
 
-Cada 15 minutos (`*/15 * * * *`, cron de Cloudflare) el Worker descarga velas de 1 y 15 min de GOLD, calcula el movimiento esperado y avisa a ntfy cuando el nivel de la **próxima hora** pasa a ALTO (≥60 % de alejarse 10 $) y cuando deja de serlo. Con el mercado cerrado no avisa. Funciona con el móvil apagado. En el móvil instala la app ntfy y suscríbete al mismo tema. En ntfy.sh cualquiera que adivine el nombre del tema puede leerlo, así que elige uno difícil de adivinar.
+Cada 15 minutos (`*/15 * * * *`, cron de Cloudflare) el Worker descarga velas de 1 y 15 min de GOLD, calcula el movimiento esperado y avisa a ntfy cuando la recomendación pasa a COMPRAR o VENDER (y cuando vuelve a ESPERAR), y cuando el nivel de la **próxima hora** pasa a ALTO (≥60 % de alejarse 10 $) y cuando deja de serlo. Con el mercado cerrado no avisa. Funciona con el móvil apagado. En el móvil instala la app ntfy y suscríbete al mismo tema. En ntfy.sh cualquiera que adivine el nombre del tema puede leerlo, así que elige uno difícil de adivinar.
 
 Solo se recomienda COMPRAR o VENDER si el recorrido probable en 15 min (ATR × √15) es de al menos `MIN_MOVE` dólares (5 por defecto, también ajustable en Ajustes de la app); el objetivo se fija a esa distancia como mínimo.
 

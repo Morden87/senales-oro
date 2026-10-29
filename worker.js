@@ -128,6 +128,20 @@ async function movementAlert(env, c1, c15) {
   return `${prev} -> ${now} (aviso enviado)`;
 }
 
+// Avisa cuando la recomendación (velas de 15 min + tendencia de 1 h) pasa a COMPRAR o VENDER, y cuando vuelve a ESPERAR.
+async function directionAlert(env, c15) {
+  const r = globalThis.GoldTA.stableSignal(c15, await getParams(env));
+  const prev = (await env.STATE.get('recAction')) || 'ESPERAR';
+  if (r.action === prev) return 'dirección ' + r.action;
+  await env.STATE.put('recAction', r.action);
+  if (!env.NTFY_TOPIC) return `${prev} -> ${r.action}`;
+  const px = fmt(r.price);
+  await ntfy(env, r.action === 'ESPERAR'
+    ? { title: `Cortés: fin de ${prev} en el oro`, message: `Precio ${px} $. Ahora ESPERAR: ${r.reason}.`, tags: ['pause_button'], priority: 3 }
+    : { title: `Cortés: ${r.action} oro`, message: `Precio ${px} $. ${r.reason}.\nRecomendación informativa, sin ventaja probada en el histórico. No es asesoramiento financiero.`, tags: [r.action === 'COMPRAR' ? 'chart_with_upwards_trend' : 'chart_with_downwards_trend'], priority: 4 });
+  return `${prev} -> ${r.action} (aviso enviado)`;
+}
+
 // Ruptura de 1 h en papel: abre al cierre de la vela de 1 h y cierra 4 h después con el precio de ese momento.
 const SPREAD = 0.5;
 async function paperBreakout(env, c1) {
@@ -160,8 +174,9 @@ async function checkAndNotify(env) {
   const c1 = closedOnly(raw1, 'OneMinute'), c15 = closedOnly(raw15, 'FifteenMinutes');
   if (!c1.length || Date.now() / 1000 - c1[c1.length - 1].time > 20 * 60) return 'mercado cerrado';
   const a = await movementAlert(env, c1, c15);
+  const d = await directionAlert(env, c15).catch((e) => 'dirección: ' + e.message);
   const b = await paperBreakout(env, c1);
-  return a + ' · ' + b;
+  return a + ' · ' + d + ' · ' + b;
 }
 
 const json = (data, status = 200) => Response.json(data, { status, headers: { 'cache-control': 'no-store' } });
@@ -216,4 +231,4 @@ export default {
   },
 };
 
-export { checkAndNotify };
+export { checkAndNotify, directionAlert };
