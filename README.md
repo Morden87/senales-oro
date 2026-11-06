@@ -17,6 +17,13 @@ Un análisis de 2 años de XAU/USD de 1 minuto (Dukascopy, contrastado con eToro
 
 eToro → Ajustes → Trading → API Key Management → Create New Key. Elige entorno **Real** (o Demo) y permiso **Read** (solo lectura). Obtendrás una *Public API Key* y una *User Key*.
 
+## Mis posiciones de eToro
+
+La tarjeta **Mis posiciones en eToro** muestra tus posiciones abiertas (con el resultado sin realizar, SL y TP) y las que cerraste en los últimos 30 días. El Worker las lee con las mismas claves (`GET /api/v1/trading/info/real/pnl` y `/api/v1/trading/info/trade/history`) y las sirve en `GET /api/portfolio?days=30`, que pide la cabecera `x-admin-pin` porque son datos privados. En la app basta con escribir el PIN en Ajustes.
+
+- La clave debe ser de entorno **Real** y permiso **Read**. Si tu clave es de la cuenta demo, añade la variable `ETORO_ACCOUNT = "demo"`.
+- Es solo lectura: la app no puede abrir, cerrar ni modificar posiciones.
+
 ## Publicarla desde el móvil (Cloudflare + GitHub, gratis)
 
 1. Sube este proyecto a un repositorio de GitHub.
@@ -26,7 +33,7 @@ eToro → Ajustes → Trading → API Key Management → Create New Key. Elige e
 
 ## Publicarla desde un ordenador
 
-El Worker sirve la app y hace de intermediario con eToro, así las claves quedan en el servidor y se evita el bloqueo CORS del navegador. Solo reenvía lecturas de `/api/v1/market-data/`, nunca cartera ni órdenes.
+El Worker sirve la app y hace de intermediario con eToro, así las claves quedan en el servidor y se evita el bloqueo CORS del navegador. El proxy `/etoro/*` solo reenvía lecturas de `/api/v1/market-data/`; la cartera solo se lee en `/api/portfolio`, con PIN, y nunca se envían órdenes.
 
 ```bash
 cd oro-app

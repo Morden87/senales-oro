@@ -14,7 +14,7 @@
   const pick = (o) => Object.fromEntries(PARAM_KEYS.filter((k) => o && o[k] !== undefined).map((k) => [k, o[k]]));
   let params = { ...pick(TA.DEFAULTS), ...pick(cfg.params) };
   let timer = null, busy = false, lastLevel = null;
-  let slow = { at: 0, c15: null, history: [], paper: null }; // datos que cambian despacio
+  let slow = { at: 0, c15: null, history: [], paper: null, pf: null }; // datos que cambian despacio
   const save = () => { const { proxy, ...persist } = cfg; persist.params = params; store.set(persist); };
   const paramsText = (p) => `${TA.MODES[p.mode] || p.mode} · exigencia ${(+p.threshold).toFixed(2)} · coincidencia ${Math.round(p.agree * 100)}%${p.htf ? ' · con tendencia 15 min' : ''}`;
 
@@ -103,6 +103,40 @@
     el.innerHTML = html;
   }
 
+
+  // ---------- posiciones de eToro ----------
+  async function loadPortfolio() {
+    if (!cfg.proxy) return { error: 'Solo disponible con tu servidor de Cloudflare.' };
+    if (!cfg.pin) return { error: 'Escribe tu PIN en Ajustes (⚙︎) para ver tus posiciones.' };
+    try {
+      const r = await fetch('api/portfolio?days=30', { cache: 'no-store', headers: { 'x-admin-pin': cfg.pin } });
+      const j = await r.json().catch(() => ({}));
+      return r.ok ? j : { error: j.error || 'El servidor respondió ' + r.status };
+    } catch { return { error: 'Sin conexión con el servidor.' }; }
+  }
+  const esc = (x) => String(x == null ? '' : x).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const money = (x) => (x == null || isNaN(x) ? '—' : (x > 0 ? '+' : '') + fmt(x) + ' $');
+  const cls = (x) => (x == null ? 'nt' : x >= 0 ? 'up' : 'dn');
+  const when = (s) => (s ? new Date(s).toLocaleString('es-ES', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—');
+  const side = (p) => `<span class="${p.isBuy ? 'up' : 'dn'}">${p.isBuy ? 'Compra' : 'Venta'}</span>${p.leverage > 1 ? ' x' + p.leverage : ''}${p.copied ? ' · copiada' : ''}`;
+  function renderPortfolio() {
+    const el = $('pf'), p = slow.pf;
+    if (!cfg.proxy) { el.textContent = 'Solo disponible con tu servidor de Cloudflare.'; return; }
+    if (!p) { el.textContent = 'Cargando…'; return; }
+    if (p.error) { el.textContent = p.error; return; }
+    const o = p.open || [], c = p.closed || [];
+    let html = `<div class="pf-sum"><div>Abiertas<b>${o.length}</b>${fmt(p.invested)} $</div>` +
+      `<div>Resultado abierto<b class="${cls(p.unrealizedPnL)}">${money(p.unrealizedPnL)}</b>&nbsp;</div>` +
+      `<div>Cerradas ${p.days} días<b class="${cls(p.closedPnL)}">${money(p.closedPnL)}</b>${c.length} ${c.length === 1 ? 'operación' : 'operaciones'}</div></div>`;
+    html += '<h2 style="margin-top:4px">Abiertas</h2>' + (o.length ? o.map((x) => `<div class="pos"><div class="t"><b>${esc(x.name)}</b><span class="${cls(x.pnl)}">${money(x.pnl)}</span></div>` +
+      `${side(x)} · ${fmt(x.amount)} $ · entrada ${fmt(x.openRate, x.openRate < 10 ? 4 : 2)}${x.rate != null ? ' · ahora ' + fmt(x.rate, x.rate < 10 ? 4 : 2) : ''}` +
+      `<br>Abierta ${when(x.openTime)}${x.stopLoss ? ' · SL ' + fmt(x.stopLoss) : ''}${x.takeProfit ? ' · TP ' + fmt(x.takeProfit) : ''}</div>`).join('') : '<p>No tienes posiciones abiertas.</p>');
+    html += `<h2 style="margin-top:12px">Cerradas (últimos ${p.days} días)</h2>` + (p.historyError ? `<p>${esc(p.historyError)}</p>` : c.length ? c.slice(0, 30).map((x) => `<div class="pos"><div class="t"><b>${esc(x.name)}</b><span class="${cls(x.pnl)}">${money(x.pnl)}</span></div>` +
+      `${side(x)} · ${fmt(x.amount)} $ · ${fmt(x.openRate, x.openRate < 10 ? 4 : 2)} → ${fmt(x.closeRate, x.closeRate < 10 ? 4 : 2)}<br>${when(x.openTime)} → ${when(x.closeTime)}</div>`).join('') : '<p>No has cerrado ninguna posición en este periodo.</p>');
+    html += `<p style="margin-top:10px">Cuenta ${p.account === 'demo' ? 'demo' : 'real'} · solo lectura · actualizado ${new Date(p.updatedAt).toLocaleTimeString('es-ES')}</p>`;
+    el.innerHTML = html;
+  }
+
   function render(res) {
     const { candles, live, label } = res;
     if (candles.length < 80) throw new Error('Pocas velas recibidas (' + candles.length + '). El mercado puede estar cerrado.');
@@ -130,8 +164,8 @@
     slow.at = Date.now();
     try { slow.c15 = (await Data.load(cfg, 15)).candles.filter((k) => k.time + 900 <= Date.now() / 1000); } catch { slow.c15 = null; }
     if (cfg.proxy) {
-      const [h, p] = await Promise.all([getJSON('api/history?days=4'), getJSON('api/paper')]);
-      slow.history = (h && h.candles) || []; slow.paper = p;
+      const [h, p, pf] = await Promise.all([getJSON('api/history?days=4'), getJSON('api/paper'), loadPortfolio()]);
+      slow.history = (h && h.candles) || []; slow.paper = p; slow.pf = pf;
     }
   }
 
@@ -139,6 +173,7 @@
     if (busy) return; busy = true; $('refresh').disabled = true;
     try {
       await refreshSlow();
+      renderPortfolio();
       const res = await Data.load(cfg, 1);
       showError(''); render(res);
     } catch (e) {
@@ -176,7 +211,8 @@
       try { await pushServerParams(next); } catch (e) { showError(e.message); }
     }
     if (cfg.notify && 'Notification' in window && Notification.permission === 'default') await Notification.requestPermission();
-    if (sourceChanged) { slow = { at: 0, c15: null, history: [], paper: null }; fitted = false; }
+    if (sourceChanged) { slow = { at: 0, c15: null, history: [], paper: null, pf: null }; fitted = false; }
+    slow.at = 0;
     lastLevel = null; refresh();
   });
 

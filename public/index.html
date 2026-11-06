@@ -77,6 +77,14 @@
   .act.COMPRAR { color: var(--buy); } .act.VENDER { color: var(--sell); } .act.ESPERAR { color: var(--wait); }
   table.pp { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
   table.pp td, table.pp th { padding: 5px 4px; border-top: 1px solid var(--line); text-align: right; } table.pp th { color: var(--muted); font-weight: 600; }
+  .pos { padding: 9px 0; border-top: 1px solid var(--line); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .pos:first-of-type { border-top: 0; }
+  .pos .t { display: flex; justify-content: space-between; gap: 8px; color: var(--text); font-size: 14px; }
+  .pos .t b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pf-sum { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 4px 0 10px; text-align: center; }
+  .pf-sum div { background: var(--panel2); border-radius: 10px; padding: 8px 4px; font-size: 12px; color: var(--muted); }
+  .pf-sum b { display: block; color: var(--text); font-size: 16px; font-variant-numeric: tabular-nums; }
+  .pf-sum b.up { color: var(--buy); } .pf-sum b.dn { color: var(--sell); }
   table.pp td:first-child, table.pp th:first-child { text-align: left; }
   footer { text-align: center; color: var(--muted); font-size: 12px; margin-top: 8px; }
 </style>
@@ -115,10 +123,15 @@
   </section>
 
 
+  <section class="card" id="pfCard">
+    <h2>Mis posiciones en eToro</h2>
+    <div id="pf" class="sub">Cargando…</div>
+  </section>
+
   <section class="card warn">
     <b>Aviso.</b> Esto no es asesoramiento financiero. Cortés estima cuánto puede moverse el oro, no hacia dónde. La app nunca opera por ti. Arriesga solo lo que puedas permitirte perder.
   </section>
-  <footer>Datos cada 30 s · <span id="ver">v2</span></footer>
+  <footer>Datos cada 30 s · <span id="ver">v3</span></footer>
 </main>
 
 <dialog id="settings">
@@ -165,7 +178,7 @@
     <div id="pinBox">
       <label for="pin">PIN para cambiar ajustes de dirección</label>
       <input id="pin" type="password" inputmode="numeric" autocomplete="off">
-      <p class="sub">Es el secreto ADMIN_PIN de Cloudflare.</p>
+      <p class="sub">Es el secreto ADMIN_PIN de Cloudflare. También sirve para ver tus posiciones de eToro.</p>
     </div>
     <label class="chk"><input type="checkbox" id="notify"> Avisarme en el móvil cuando el movimiento esperado pase a ALTO (con la app abierta)</label>
     <div class="actions"><button value="cancel">Cancelar</button><button value="ok" class="primary" id="save">Guardar</button></div>
