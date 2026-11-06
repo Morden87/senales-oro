@@ -1,6 +1,6 @@
 // Cloudflare Worker: sirve la app (carpeta public/), reenvía /etoro/* a la API de eToro
 // añadiendo las claves (secretos del Worker, nunca llegan al navegador), guarda el histórico
-// de velas de 1 min y, cada 15 minutos, calcula cuánto se espera que se mueva el oro, avisa por ntfy
+// de velas de 1 min, muestra tus posiciones de eToro (solo lectura, con PIN) y, cada 15 minutos, calcula cuánto se espera que se mueva el oro, avisa por ntfy
 // cuando se espera mucho movimiento y sigue en papel la ruptura de 1 h a favor de la tendencia diaria.
 import './public/indicators.js'; // define globalThis.GoldTA
 import './public/movement.js'; // define globalThis.GoldMove
@@ -132,6 +132,14 @@ async function movementAlert(env, c1, c15) {
 async function directionAlert(env, c15) {
   const r = globalThis.GoldTA.stableSignal(c15, await getParams(env));
   const prev = (await env.STATE.get('recAction')) || 'ESPERAR';
+  // Registro de recomendaciones (cada cambio), para comparar luego con tus operaciones reales.
+  const log = JSON.parse((await env.STATE.get('recLog')) || 'null');
+  if (!log || r.action !== prev) {
+    const next = log || { start: Math.floor(Date.now() / 1000), items: [] };
+    next.items.push({ t: Math.floor(Date.now() / 1000), a: r.action, p: r.price, s: r.stage || null });
+    next.items = next.items.slice(-3000);
+    await env.STATE.put('recLog', JSON.stringify(next));
+  }
   if (r.action === prev) return 'dirección ' + r.action;
   await env.STATE.put('recAction', r.action);
   if (!env.NTFY_TOPIC) return `${prev} -> ${r.action}`;
@@ -179,6 +187,76 @@ async function checkAndNotify(env) {
   return a + ' · ' + d + ' · ' + b;
 }
 
+// ---------- Cartera de eToro (solo lectura) ----------
+// Usa las mismas claves. Con ETORO_ACCOUNT = "demo" lee la cuenta demo; por defecto, la real.
+const pick = (o, ...ks) => { for (const k of ks) if (o && o[k] !== undefined && o[k] !== null) return o[k]; return undefined; };
+const num = (x) => (x === undefined || x === null || x === '' || !isFinite(+x) ? null : +x);
+
+async function instrumentNames(env, ids) {
+  const names = {}, missing = [];
+  await Promise.all(ids.map(async (id) => { const n = await env.STATE.get('inst:' + id); if (n) names[id] = JSON.parse(n); else missing.push(id); }));
+  for (let i = 0; i < missing.length; i += 50) {
+    const r = await etoro(env, '/api/v1/market-data/instruments?instrumentIds=' + missing.slice(i, i + 50).join(','));
+    if (!r.ok) continue;
+    for (const d of (await r.json()).instrumentDisplayDatas || []) {
+      const id = pick(d, 'instrumentID', 'instrumentId');
+      const v = { name: pick(d, 'instrumentDisplayName', 'displayName') || String(id), symbol: pick(d, 'symbolFull', 'symbol') || '' };
+      names[id] = v;
+      await env.STATE.put('inst:' + id, JSON.stringify(v), { expirationTtl: 30 * 86400 });
+    }
+  }
+  return names;
+}
+
+function openPosition(p) {
+  const u = p.unrealizedPnL && typeof p.unrealizedPnL === 'object' ? p.unrealizedPnL : {};
+  return {
+    id: pick(p, 'positionID', 'positionId'), instrumentId: pick(p, 'instrumentID', 'instrumentId'),
+    isBuy: !!p.isBuy, leverage: num(p.leverage) || 1, openRate: num(p.openRate), units: num(p.units),
+    amount: num(pick(p, 'amount', 'initialAmountInDollars')), openTime: pick(p, 'openDateTime', 'openTimestamp') || null,
+    stopLoss: p.isNoStopLoss ? null : num(p.stopLossRate), takeProfit: p.isNoTakeProfit ? null : num(p.takeProfitRate),
+    rate: num(pick(u, 'closeRate') ?? p.closeRate), pnl: num(pick(u, 'pnL', 'pnl') ?? p.pnL ?? (typeof p.unrealizedPnL === 'number' ? p.unrealizedPnL : undefined)),
+    copied: !!num(pick(p, 'mirrorID', 'mirrorId')),
+  };
+}
+
+function closedPosition(t) {
+  return {
+    id: pick(t, 'positionId', 'positionID'), instrumentId: pick(t, 'instrumentId', 'instrumentID'),
+    isBuy: !!t.isBuy, leverage: num(t.leverage) || 1, openRate: num(t.openRate), closeRate: num(t.closeRate), units: num(t.units),
+    amount: num(pick(t, 'investment', 'initialInvestment')), openTime: t.openTimestamp || null, closeTime: t.closeTimestamp || null,
+    pnl: num(t.netProfit), fees: num(t.fees), copied: !!num(t.parentPositionId),
+  };
+}
+
+async function portfolio(env, days) {
+  const demo = String(env.ETORO_ACCOUNT || 'real').toLowerCase() === 'demo';
+  const minDate = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+  const histPath = (demo ? '/api/v1/trading/info/demo/trade/history' : '/api/v1/trading/info/trade/history') + `?minDate=${minDate}&pageSize=500`;
+  const [rp, rh] = await Promise.all([etoro(env, `/api/v1/trading/info/${demo ? 'demo' : 'real'}/pnl`), etoro(env, histPath)]);
+  if (!rp.ok) {
+    const hint = rp.status === 401 || rp.status === 403 ? ' Revisa que la clave de eToro sea de la cuenta ' + (demo ? 'demo' : 'real') + ' y tenga permiso de lectura.' : '';
+    throw Object.assign(new Error('eToro respondió ' + rp.status + ' al leer la cartera.' + hint), { status: 502 });
+  }
+  const cp = (await rp.json()).clientPortfolio || {};
+  const raw = (cp.positions || []).concat(...(cp.mirrors || []).map((m) => m.positions || []));
+  const open = raw.map(openPosition);
+  let closed = [], historyError = null;
+  if (rh.ok) {
+    const h = await rh.json();
+    closed = (Array.isArray(h) ? h : h.items || h.trades || []).map(closedPosition)
+      .sort((a, b) => Date.parse(b.closeTime || 0) - Date.parse(a.closeTime || 0)).slice(0, 200);
+  } else historyError = 'eToro respondió ' + rh.status + ' al leer el historial';
+  const names = await instrumentNames(env, [...new Set(open.concat(closed).map((x) => x.instrumentId).filter((x) => x != null))]);
+  for (const x of open.concat(closed)) Object.assign(x, names[x.instrumentId] || { name: 'Instrumento ' + x.instrumentId, symbol: '' });
+  const sum = (a, k) => a.reduce((s, x) => s + (x[k] || 0), 0);
+  return {
+    account: demo ? 'demo' : 'real', days, updatedAt: new Date().toISOString(), historyError,
+    credit: num(cp.credit), unrealizedPnL: num(typeof cp.unrealizedPnL === 'number' ? cp.unrealizedPnL : pick(cp.unrealizedPnL || {}, 'pnL')) ?? sum(open, 'pnl'),
+    invested: sum(open, 'amount'), closedPnL: sum(closed, 'pnl'), open, closed,
+  };
+}
+
 const json = (data, status = 200) => Response.json(data, { status, headers: { 'cache-control': 'no-store' } });
 
 export default {
@@ -196,6 +274,18 @@ export default {
         return json(await getParams(env));
       }
       return json({ error: 'No permitido' }, 405);
+    }
+    // Posiciones de tu cuenta de eToro: son privadas, así que piden el mismo PIN que los ajustes.
+    if (url.pathname.endsWith('/api/portfolio')) {
+      if (request.method !== 'GET') return json({ error: 'No permitido' }, 405);
+      if (!env.ADMIN_PIN) return json({ error: 'Falta el secreto ADMIN_PIN en Cloudflare' }, 501);
+      if (request.headers.get('x-admin-pin') !== env.ADMIN_PIN) return json({ error: 'PIN incorrecto' }, 403);
+      if (!env.ETORO_API_KEY || !env.ETORO_USER_KEY) return json({ error: 'Faltan las claves de eToro en Cloudflare' }, 501);
+      const days = Math.min(364, Math.max(1, +url.searchParams.get('days') || 30));
+      try { return json(await portfolio(env, days)); } catch (e) { return json({ error: e.message }, e.status || 500); }
+    }
+    if (url.pathname.endsWith('/api/recs')) {
+      return new Response((await env.STATE.get('recLog')) || 'null', { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
     }
     if (url.pathname.endsWith('/api/paper')) {
       return new Response((await env.STATE.get('paper')) || '{"open":[],"closed":[]}', {
