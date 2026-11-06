@@ -251,7 +251,7 @@ async function portfolio(env, days) {
   for (const x of open.concat(closed)) Object.assign(x, names[x.instrumentId] || { name: 'Instrumento ' + x.instrumentId, symbol: '' });
   const sum = (a, k) => a.reduce((s, x) => s + (x[k] || 0), 0);
   return {
-    account: demo ? 'demo' : 'real', days, updatedAt: new Date().toISOString(), historyError,
+    account: demo ? 'demo' : 'real', days, statsFrom: env.STATS_FROM || null, updatedAt: new Date().toISOString(), historyError,
     credit: num(cp.credit), unrealizedPnL: num(typeof cp.unrealizedPnL === 'number' ? cp.unrealizedPnL : pick(cp.unrealizedPnL || {}, 'pnL')) ?? sum(open, 'pnl'),
     invested: sum(open, 'amount'), closedPnL: sum(closed, 'pnl'), open, closed,
   };
@@ -281,7 +281,10 @@ export default {
       if (!env.ADMIN_PIN) return json({ error: 'Falta el secreto ADMIN_PIN en Cloudflare' }, 501);
       if (request.headers.get('x-admin-pin') !== env.ADMIN_PIN) return json({ error: 'PIN incorrecto' }, 403);
       if (!env.ETORO_API_KEY || !env.ETORO_USER_KEY) return json({ error: 'Faltan las claves de eToro en Cloudflare' }, 501);
-      const days = Math.min(364, Math.max(1, +url.searchParams.get('days') || 30));
+      // Por defecto, desde STATS_FROM (creación de Cortés) o 30 días.
+      const since = Date.parse(env.STATS_FROM || '');
+      const auto = isFinite(since) ? Math.ceil((Date.now() - since) / 86400000) : 30;
+      const days = Math.min(364, Math.max(1, +url.searchParams.get('days') || auto));
       try { return json(await portfolio(env, days)); } catch (e) { return json({ error: e.message }, e.status || 500); }
     }
     if (url.pathname.endsWith('/api/recs')) {

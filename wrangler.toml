@@ -20,3 +20,5 @@ binding = "STATE"
 NTFY_SERVER = "https://ntfy.sh"
 THRESHOLD = "0.22"
 MIN_MOVE = "5"
+# Las estadísticas de tus operaciones empiezan aquí (creación de Cortés); lo anterior se omite.
+STATS_FROM = "2026-10-28T12:56:00Z"
