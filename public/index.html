@@ -86,6 +86,7 @@
   .pf-sum b { display: block; color: var(--text); font-size: 16px; font-variant-numeric: tabular-nums; }
   .pf-sum b.up { color: var(--buy); } .pf-sum b.dn { color: var(--sell); }
   table.pp td:first-child, table.pp th:first-child { text-align: left; }
+  table.pp td:not(:first-child) { white-space: nowrap; }
   footer { text-align: center; color: var(--muted); font-size: 12px; margin-top: 8px; }
 </style>
 </head>
@@ -128,10 +129,16 @@
     <div id="pf" class="sub">Cargando…</div>
   </section>
 
+  <section class="card" id="rvCard">
+    <h2>Tus operaciones de oro frente a Cortés</h2>
+    <p class="sub" style="margin:0 0 8px">Compara cada operación de oro que abriste o cerraste con la recomendación que daba la app en ese momento, y propone mejoras. Usa el registro del servidor y, para fechas anteriores, la recalcula con las velas guardadas (hasta 30 días) y los ajustes actuales.</p>
+    <div id="rv" class="sub">Cargando…</div>
+  </section>
+
   <section class="card warn">
     <b>Aviso.</b> Esto no es asesoramiento financiero. Cortés estima cuánto puede moverse el oro, no hacia dónde. La app nunca opera por ti. Arriesga solo lo que puedas permitirte perder.
   </section>
-  <footer>Datos cada 30 s · <span id="ver">v3</span></footer>
+  <footer>Datos cada 30 s · <span id="ver">v4</span></footer>
 </main>
 
 <dialog id="settings">
@@ -188,6 +195,7 @@
 <script src="lwc.js"></script>
 <script src="indicators.js"></script>
 <script src="movement.js"></script>
+<script src="review.js"></script>
 <script src="data.js"></script>
 <script src="app.js"></script>
 </body>

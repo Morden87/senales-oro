@@ -24,6 +24,13 @@ La tarjeta **Mis posiciones en eToro** muestra tus posiciones abiertas (con el r
 - La clave debe ser de entorno **Real** y permiso **Read**. Si tu clave es de la cuenta demo, añade la variable `ETORO_ACCOUNT = "demo"`.
 - Es solo lectura: la app no puede abrir, cerrar ni modificar posiciones.
 
+## Tus operaciones de oro frente a Cortés
+
+La tarjeta compara cada operación de oro (abierta o cerrada en los últimos 30 días) con la recomendación de la app al abrirla y al cerrarla, y las agrupa en *a favor*, *en contra*, *con la app en ESPERAR* o *sin datos*. Para cada grupo da el número de operaciones, el porcentaje de ganadoras y el resultado total y medio, y propone mejoras (evitar ir contra la señal, no entrar en ESPERAR, no entrar con la tendencia avanzada, cortar antes las pérdidas…). El botón *Copiar resumen* copia los datos en texto para analizarlos con más calma.
+
+- Desde este cambio el Worker guarda cada cambio de recomendación en KV (`recLog`, `GET /api/recs`), con la hora y el precio. Para operaciones anteriores al registro, la recomendación se recalcula con las velas de 1 min guardadas (hasta 30 días) y los ajustes actuales, y se marca como *recalculada*.
+- El análisis se hace en el navegador (`public/review.js`).
+
 ## Publicarla desde el móvil (Cloudflare + GitHub, gratis)
 
 1. Sube este proyecto a un repositorio de GitHub.

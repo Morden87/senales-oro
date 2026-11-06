@@ -1,6 +1,6 @@
 (function () {
   const $ = (id) => document.getElementById(id);
-  const TA = window.GoldTA, MV = window.GoldMove, Data = window.GoldData;
+  const TA = window.GoldTA, MV = window.GoldMove, Data = window.GoldData, RV = window.GoldReview;
   const REFRESH_MS = 30000, SLOW_MS = 5 * 60000;
 
   const store = {
@@ -14,7 +14,7 @@
   const pick = (o) => Object.fromEntries(PARAM_KEYS.filter((k) => o && o[k] !== undefined).map((k) => [k, o[k]]));
   let params = { ...pick(TA.DEFAULTS), ...pick(cfg.params) };
   let timer = null, busy = false, lastLevel = null;
-  let slow = { at: 0, c15: null, history: [], paper: null, pf: null }; // datos que cambian despacio
+  let slow = { at: 0, c15: null, history: [], paper: null, pf: null, rv: null, rvAt: 0 }; // datos que cambian despacio
   const save = () => { const { proxy, ...persist } = cfg; persist.params = params; store.set(persist); };
   const paramsText = (p) => `${TA.MODES[p.mode] || p.mode} · exigencia ${(+p.threshold).toFixed(2)} · coincidencia ${Math.round(p.agree * 100)}%${p.htf ? ' · con tendencia 15 min' : ''}`;
 
@@ -137,6 +137,45 @@
     el.innerHTML = html;
   }
 
+  // ---------- análisis: tus operaciones de oro frente a la recomendación ----------
+  async function loadReview() {
+    const p = slow.pf;
+    if (!p || p.error) return null;
+    if (!(p.open || []).concat(p.closed || []).some(RV.isGold)) return { rows: [], empty: true };
+    if (slow.rv && Date.now() - slow.rvAt < 30 * 60000) return slow.rv;
+    const [h, log] = await Promise.all([getJSON('api/history?days=30'), getJSON('api/recs')]);
+    const c1 = ((h && h.candles) || []).map((k) => ({ time: k[0], open: k[1], high: k[2], low: k[3], close: k[4] }));
+    const c15 = MV.resample(c1, 15).filter((k) => k.time + 900 <= Date.now() / 1000);
+    const res = RV.analyze({ open: p.open, closed: p.closed, c15, params, log });
+    res.from = c15.length ? c15[0].time : null;
+    slow.rvAt = Date.now();
+    return res;
+  }
+  function renderReview() {
+    const el = $('rv'), p = slow.pf, r = slow.rv;
+    if (!cfg.proxy) { el.textContent = 'Solo disponible con tu servidor de Cloudflare.'; return; }
+    if (!p || p.error) { el.textContent = p && p.error ? 'Hace falta ver tus posiciones primero (PIN en Ajustes).' : 'Cargando…'; return; }
+    if (!r) { el.textContent = 'Cargando…'; return; }
+    if (r.empty) { el.textContent = `No hay operaciones de oro en los últimos ${p.days} días.`; return; }
+    const g = r.groups, rowG = (k) => { const x = g[k]; return x.n ? `<tr><td>${RV.GROUPS[k]}</td><td>${x.n}</td><td>${pct(x.winRate)}</td><td class="${cls(x.total)}">${money(x.total)}</td><td class="${cls(x.avg)}">${money(x.avg)}</td></tr>` : ''; };
+    let html = '<table class="pp"><tr><th>Cerradas</th><th>Nº</th><th>Ganadoras</th><th>Total</th><th>Media</th></tr>' +
+      ['favor', 'contra', 'esperar', 'sin'].map(rowG).join('') +
+      `<tr><td><b>Todas</b></td><td>${r.all.n}</td><td>${pct(r.all.winRate)}</td><td class="${cls(r.all.total)}">${money(r.all.total)}</td><td class="${cls(r.all.avg)}">${money(r.all.avg)}</td></tr></table>`;
+    html += '<h2 style="margin-top:12px">Sugerencias</h2><ul style="margin:0;padding-left:18px">' + r.suggestions.map((s) => `<li style="margin:4px 0">${esc(s)}</li>`).join('') + '</ul>';
+    const word = { favor: '<span class="up">a favor</span>', contra: '<span class="dn">en contra</span>', esperar: 'en ESPERAR', sin: 'sin datos' };
+    html += '<h2 style="margin-top:12px">Detalle</h2>' + r.rows.slice().sort((a, b) => Date.parse(b.openTime) - Date.parse(a.openTime)).slice(0, 30).map((x) =>
+      `<div class="pos"><div class="t"><b>${x.isBuy ? 'Compra' : 'Venta'} ${when(x.openTime)}${x.isOpen ? ' · abierta' : ''}</b><span class="${cls(x.pnl)}">${money(x.pnl)}</span></div>` +
+      `Al abrir: ${x.recOpen || '—'}${x.group === 'favor' || x.group === 'contra' ? ` (${word[x.group]})` : ''}${x.stageOpen ? ', tendencia ' + esc(x.stageOpen) : ''}${x.isOpen ? '' : ` · al cerrar: ${x.recClose || '—'}`}${x.minutes != null ? ` · ${x.minutes < 120 ? x.minutes + ' min' : (x.minutes / 60).toFixed(1) + ' h'}` : ''}${x.source === 'recalculada' ? ' · recalculada' : ''}</div>`).join('');
+    if (r.otherClosed) html += `<p style="margin-top:8px">${r.otherClosed} ${r.otherClosed === 1 ? 'operación cerrada' : 'operaciones cerradas'} de otros instrumentos no ${r.otherClosed === 1 ? 'entra' : 'entran'} en este análisis.</p>`;
+    html += '<div class="actions" style="justify-content:flex-start"><button id="rvCopy">Copiar resumen</button></div>';
+    el.innerHTML = html;
+    $('rvCopy').onclick = () => {
+      const lines = [`Operaciones de oro (últimos ${p.days} días):`, ...['favor', 'contra', 'esperar', 'sin'].filter((k) => g[k].n).map((k) => `- ${RV.GROUPS[k]}: ${g[k].n} ops, ${pct(g[k].winRate)} ganadoras, total ${money(g[k].total)}, media ${money(g[k].avg)}`),
+        '', 'Detalle:', ...r.rows.map((x) => `${x.openTime} ${x.isBuy ? 'COMPRA' : 'VENTA'} x${x.leverage} ${x.amount}$ → ${x.isOpen ? 'abierta' : x.closeTime} P/L ${x.pnl} · rec. al abrir ${x.recOpen || '-'} (${x.stageOpen || '-'}) · al cerrar ${x.recClose || '-'}`)];
+      navigator.clipboard.writeText(lines.join('\n')).then(() => { $('rvCopy').textContent = 'Copiado'; }, () => { $('rvCopy').textContent = 'No se pudo copiar'; });
+    };
+  }
+
   function render(res) {
     const { candles, live, label } = res;
     if (candles.length < 80) throw new Error('Pocas velas recibidas (' + candles.length + '). El mercado puede estar cerrado.');
@@ -166,6 +205,7 @@
     if (cfg.proxy) {
       const [h, p, pf] = await Promise.all([getJSON('api/history?days=4'), getJSON('api/paper'), loadPortfolio()]);
       slow.history = (h && h.candles) || []; slow.paper = p; slow.pf = pf;
+      try { slow.rv = await loadReview(); } catch (e) { slow.rv = null; console.warn(e); }
     }
   }
 
@@ -173,7 +213,7 @@
     if (busy) return; busy = true; $('refresh').disabled = true;
     try {
       await refreshSlow();
-      renderPortfolio();
+      renderPortfolio(); renderReview();
       const res = await Data.load(cfg, 1);
       showError(''); render(res);
     } catch (e) {
@@ -211,7 +251,7 @@
       try { await pushServerParams(next); } catch (e) { showError(e.message); }
     }
     if (cfg.notify && 'Notification' in window && Notification.permission === 'default') await Notification.requestPermission();
-    if (sourceChanged) { slow = { at: 0, c15: null, history: [], paper: null, pf: null }; fitted = false; }
+    if (sourceChanged) { slow = { at: 0, c15: null, history: [], paper: null, pf: null, rv: null, rvAt: 0 }; fitted = false; }
     slow.at = 0;
     lastLevel = null; refresh();
   });

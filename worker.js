@@ -132,6 +132,14 @@ async function movementAlert(env, c1, c15) {
 async function directionAlert(env, c15) {
   const r = globalThis.GoldTA.stableSignal(c15, await getParams(env));
   const prev = (await env.STATE.get('recAction')) || 'ESPERAR';
+  // Registro de recomendaciones (cada cambio), para comparar luego con tus operaciones reales.
+  const log = JSON.parse((await env.STATE.get('recLog')) || 'null');
+  if (!log || r.action !== prev) {
+    const next = log || { start: Math.floor(Date.now() / 1000), items: [] };
+    next.items.push({ t: Math.floor(Date.now() / 1000), a: r.action, p: r.price, s: r.stage || null });
+    next.items = next.items.slice(-3000);
+    await env.STATE.put('recLog', JSON.stringify(next));
+  }
   if (r.action === prev) return 'dirección ' + r.action;
   await env.STATE.put('recAction', r.action);
   if (!env.NTFY_TOPIC) return `${prev} -> ${r.action}`;
@@ -275,6 +283,9 @@ export default {
       if (!env.ETORO_API_KEY || !env.ETORO_USER_KEY) return json({ error: 'Faltan las claves de eToro en Cloudflare' }, 501);
       const days = Math.min(364, Math.max(1, +url.searchParams.get('days') || 30));
       try { return json(await portfolio(env, days)); } catch (e) { return json({ error: e.message }, e.status || 500); }
+    }
+    if (url.pathname.endsWith('/api/recs')) {
+      return new Response((await env.STATE.get('recLog')) || 'null', { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
     }
     if (url.pathname.endsWith('/api/paper')) {
       return new Response((await env.STATE.get('paper')) || '{"open":[],"closed":[]}', {
