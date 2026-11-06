@@ -29,6 +29,7 @@ La tarjeta **Mis posiciones en eToro** muestra tus posiciones abiertas (con el r
 La tarjeta compara cada operación de oro (abierta o cerrada en los últimos 30 días) con la recomendación de la app al abrirla y al cerrarla, y las agrupa en *a favor*, *en contra*, *con la app en ESPERAR* o *sin datos*. Para cada grupo da el número de operaciones, el porcentaje de ganadoras y el resultado total y medio, y propone mejoras (evitar ir contra la señal, no entrar en ESPERAR, no entrar con la tendencia avanzada, cortar antes las pérdidas…). El botón *Copiar resumen* copia los datos en texto para analizarlos con más calma.
 
 - Desde este cambio el Worker guarda cada cambio de recomendación en KV (`recLog`, `GET /api/recs`), con la hora y el precio. Para operaciones anteriores al registro, la recomendación se recalcula con las velas de 1 min guardadas (hasta 30 días) y los ajustes actuales, y se marca como *recalculada*.
+- **Pirámides**: las posiciones del mismo lado que se abren mientras otra del grupo sigue abierta cuentan como una sola operación. Para cada una: escalones, margen máximo, peor pérdida latente (estimada con los mínimos o máximos de las velas de 15 min), duración y resultado. Las sugerencias comparan la peor pérdida latente con la ganancia media, avisan de pirámides largas o con escalones muy seguidos y de las que empezaron con Cortés en contra.
 - El análisis se hace en el navegador (`public/review.js`).
 
 ## Publicarla desde el móvil (Cloudflare + GitHub, gratis)

@@ -42,6 +42,7 @@
       const ro = to ? recAt(to, c15, params, log) : null, rc = tc ? recAt(tc, c15, params, log) : null;
       rows.push({
         id: p.id, isOpen, isBuy: p.isBuy, pnl: p.pnl, amount: p.amount, leverage: p.leverage, openTime: p.openTime, closeTime: p.closeTime,
+        openRate: p.openRate, units: p.units || (p.amount && p.leverage && p.openRate ? p.amount * p.leverage / p.openRate : null), to, tc,
         minutes: to && tc ? Math.round((tc - to) / 60) : null,
         recOpen: ro && ro.action, stageOpen: ro && ro.stage, source: ro && ro.source, recClose: rc && rc.action,
         group: ro ? relation(p.isBuy, ro.action) : 'sin',
@@ -52,7 +53,74 @@
     const done = rows.filter((r) => !r.isOpen);
     const groups = Object.fromEntries(Object.keys(GROUPS).map((g) => [g, stats(done.filter((r) => r.group === g))]));
     const all = stats(done);
-    return { rows, groups, all, suggestions: suggest(done, groups, all), otherClosed: closed.filter((p) => !isGold(p)).length };
+    const cycles = pyramids(rows, c15);
+    return { rows, groups, all, cycles, cycleStats: cycleStats(cycles), suggestions: suggestCycles(cycles).concat(suggest(done, groups, all)), otherClosed: closed.filter((p) => !isGold(p)).length };
+  }
+
+  // Pirámides: posiciones del mismo lado que se abren mientras otra del grupo sigue abierta cuentan como una sola operación.
+  function pyramids(rows, c15) {
+    const list = rows.filter((r) => r.to).sort((a, b) => a.to - b.to), out = [];
+    let cur = null;
+    for (const r of list) {
+      const live = cur && cur.isBuy === r.isBuy && cur.legs.some((x) => x.tc == null || x.tc > r.to);
+      if (!live) { cur = { isBuy: r.isBuy, legs: [] }; out.push(cur); }
+      cur.legs.push(r);
+    }
+    const now = Date.now() / 1000;
+    return out.map((c) => {
+      const L = c.legs, start = L[0].to, isOpen = L.some((x) => x.tc == null);
+      const end = isOpen ? now : Math.max(...L.map((x) => x.tc));
+      // Peor pérdida latente: con el mínimo (o máximo, si vendes) de cada vela de 15 min, sumando las posiciones abiertas en ese momento.
+      let worst = null, maxMargin = 0;
+      for (const k of c15) {
+        if (k.time + 900 <= start || k.time >= end) continue;
+        const px = c.isBuy ? k.low : k.high;
+        let pl = 0, margin = 0, any = false;
+        for (const x of L) {
+          if (x.to > k.time + 900 || (x.tc != null && x.tc <= k.time) || !x.units || !x.openRate) continue;
+          pl += (c.isBuy ? 1 : -1) * x.units * (px - x.openRate); margin += x.amount || 0; any = true;
+        }
+        if (any && (worst == null || pl < worst)) worst = pl;
+        if (margin > maxMargin) maxMargin = margin;
+      }
+      if (!maxMargin) maxMargin = L.reduce((a, x) => a + (x.amount || 0), 0);
+      const gaps = L.slice(1).map((x, i) => (x.to - L[i].to) / 60);
+      return {
+        isBuy: c.isBuy, isOpen, steps: L.length, start: L[0].openTime, end: isOpen ? null : new Date(end * 1000).toISOString(),
+        minutes: Math.round((end - start) / 60), pnl: L.reduce((a, x) => a + (x.pnl || 0), 0), margin: L.reduce((a, x) => a + (x.amount || 0), 0), maxMargin,
+        worst: worst == null ? null : Math.min(0, worst), stepGapMin: gaps.length ? gaps.reduce((a, b) => a + b, 0) / gaps.length : null,
+        recStart: L[0].recOpen || null, group: L[0].group, legs: L.map((x) => x.id),
+      };
+    });
+  }
+
+  function cycleStats(cycles) {
+    const done = cycles.filter((c) => !c.isOpen), st = stats(done);
+    const w = done.map((c) => c.worst).filter((x) => x != null);
+    return { ...st, maxSteps: Math.max(0, ...cycles.map((c) => c.steps)), avgSteps: cycles.length ? cycles.reduce((a, c) => a + c.steps, 0) / cycles.length : null,
+      maxMargin: Math.max(0, ...cycles.map((c) => c.maxMargin)), worst: w.length ? Math.min(...w) : null };
+  }
+
+  function suggestCycles(cycles) {
+    const out = [], done = cycles.filter((c) => !c.isOpen);
+    if (!cycles.length) return out;
+    const st = cycleStats(cycles), wins = done.filter((c) => c.pnl > 0);
+    const avgWin = wins.length ? wins.reduce((a, c) => a + c.pnl, 0) / wins.length : null;
+    if (st.worst != null && avgWin) {
+      const k = Math.abs(st.worst) / avgWin;
+      if (k >= 3) out.push(`Tu peor pérdida latente en una pirámide fue de ${n2(-st.worst)} $, lo mismo que ${Math.round(k)} cierres ganadores medios (${n2(avgWin)} $). Pon un stop de pérdida total por pirámide.`);
+    }
+    if (st.maxSteps > 5) out.push(`Tu pirámide más larga tuvo ${st.maxSteps} escalones y llegó a ${n2(st.maxMargin)} $ de margen. Limítala a 4 o 5 escalones.`);
+    const gaps = cycles.map((c) => c.stepGapMin).filter((x) => x != null);
+    if (gaps.length >= 2) {
+      const g = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+      if (g < 120) out.push(`De media añades un escalón cada ${Math.round(g)} min: es el ruido normal del oro. Separa los escalones por precio (por ejemplo, 20-25 $ de caída) en lugar de por el % de la posición.`);
+    }
+    const lost = done.filter((c) => c.pnl < 0);
+    if (lost.length) out.push(`${lost.length} de ${done.length} pirámides cerraron en pérdidas, con ${usd(lost.reduce((a, c) => a + c.pnl, 0))} en total.`);
+    const contra = done.filter((c) => c.group === 'contra');
+    if (contra.length >= 2) out.push(`${contra.length} pirámides empezaron con Cortés en contra (${usd(contra.reduce((a, c) => a + c.pnl, 0))}). No empieces una pirámide de compra con la app en VENDER.`);
+    return out;
   }
 
   const n2 = (x) => x.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
