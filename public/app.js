@@ -115,7 +115,7 @@
     } catch { return { error: 'Sin conexión con el servidor.' }; }
   }
   const esc = (x) => String(x == null ? '' : x).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const money = (x) => (x == null || isNaN(x) ? '—' : (x > 0 ? '+' : '') + fmt(x) + ' $');
+  const money = (x) => (x == null || isNaN(x) ? '—' : (x > 0 ? '+' : '') + fmt(x) + '\u00a0$');
   const cls = (x) => (x == null ? 'nt' : x >= 0 ? 'up' : 'dn');
   const when = (s) => (s ? new Date(s).toLocaleString('es-ES', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—');
   const side = (p) => `<span class="${p.isBuy ? 'up' : 'dn'}">${p.isBuy ? 'Compra' : 'Venta'}</span>${p.leverage > 1 ? ' x' + p.leverage : ''}${p.copied ? ' · copiada' : ''}`;
@@ -160,9 +160,18 @@
     const desde = p.statsFrom ? 'desde el ' + new Date(p.statsFrom).toLocaleDateString('es-ES') : `en los últimos ${p.days} días`;
     if (r.empty) { el.textContent = `No hay operaciones de oro ${desde}.`; return; }
     const g = r.groups, rowG = (k) => { const x = g[k]; return x.n ? `<tr><td>${RV.GROUPS[k]}</td><td>${x.n}</td><td>${pct(x.winRate)}</td><td class="${cls(x.total)}">${money(x.total)}</td><td class="${cls(x.avg)}">${money(x.avg)}</td></tr>` : ''; };
-    let html = `<p style="margin:0 0 6px">Operaciones de oro abiertas ${desde} (creación de Cortés).</p>` + '<table class="pp"><tr><th>Cerradas</th><th>Nº</th><th>Ganadoras</th><th>Total</th><th>Media</th></tr>' +
+    let html = `<p style="margin:0 0 6px">Operaciones de oro abiertas ${desde}${p.statsFrom ? ' (creación de Cortés)' : ''}.</p>` + '<table class="pp"><tr><th>Cerradas</th><th>Nº</th><th>Ganadoras</th><th>Total</th><th>Media</th></tr>' +
       ['favor', 'contra', 'esperar', 'sin'].map(rowG).join('') +
       `<tr><td><b>Todas</b></td><td>${r.all.n}</td><td>${pct(r.all.winRate)}</td><td class="${cls(r.all.total)}">${money(r.all.total)}</td><td class="${cls(r.all.avg)}">${money(r.all.avg)}</td></tr></table>`;
+    const cs = r.cycleStats;
+    if (r.cycles.length) {
+      const dur = (m) => (m < 120 ? m + ' min' : m < 2880 ? (m / 60).toFixed(1) + ' h' : (m / 1440).toFixed(1) + ' d');
+      html += `<h2 style="margin-top:12px">Pirámides (${r.cycles.length})</h2><p style="margin:0 0 6px">Las posiciones que añades mientras otras siguen abiertas cuentan como una sola operación. ` +
+        `Media ${cs.avgSteps.toFixed(1)} escalones, máximo ${cs.maxSteps} · margen máximo ${fmt(cs.maxMargin)} $ · peor pérdida latente <b class="dn">${cs.worst == null ? '—' : money(cs.worst)}</b> · cerradas: ${cs.n}, ${pct(cs.winRate)} ganadoras, total <b class="${cls(cs.total)}">${money(cs.total)}</b>.</p>` +
+        '<table class="pp"><tr><th>Inicio</th><th>Esc.</th><th>Margen</th><th>Peor</th><th>Result.</th></tr>' +
+        r.cycles.slice().reverse().slice(0, 20).map((c) => `<tr><td>${when(c.start)}${c.isOpen ? ' · abierta' : ' · ' + dur(c.minutes)}</td><td>${c.steps}</td><td>${fmt(c.maxMargin, 0)}</td><td class="dn">${c.worst == null ? '—' : fmt(Math.round(c.worst) || 0, 0)}</td><td class="${cls(c.pnl)}">${money(c.pnl)}</td></tr>`).join('') + '</table>' +
+        '<p style="margin:4px 0 0">"Peor": la mayor pérdida latente de la pirámide, estimada con velas de 15 min.</p>';
+    }
     html += '<h2 style="margin-top:12px">Sugerencias</h2><ul style="margin:0;padding-left:18px">' + r.suggestions.map((s) => `<li style="margin:4px 0">${esc(s)}</li>`).join('') + '</ul>';
     const word = { favor: '<span class="up">a favor</span>', contra: '<span class="dn">en contra</span>', esperar: 'en ESPERAR', sin: 'sin datos' };
     html += '<h2 style="margin-top:12px">Detalle</h2>' + r.rows.slice().sort((a, b) => Date.parse(b.openTime) - Date.parse(a.openTime)).slice(0, 30).map((x) =>
@@ -173,6 +182,10 @@
     el.innerHTML = html;
     $('rvCopy').onclick = () => {
       const lines = [`Operaciones de oro ${desde}:`, ...['favor', 'contra', 'esperar', 'sin'].filter((k) => g[k].n).map((k) => `- ${RV.GROUPS[k]}: ${g[k].n} ops, ${pct(g[k].winRate)} ganadoras, total ${money(g[k].total)}, media ${money(g[k].avg)}`),
+        '', `Pirámides: ${r.cycles.length} · media ${cs.avgSteps ? cs.avgSteps.toFixed(1) : '-'} escalones, máx ${cs.maxSteps} · margen máx ${cs.maxMargin} $ · peor latente ${cs.worst == null ? '-' : cs.worst.toFixed(0)} $`,
+        ...r.cycles.map((c) => `${c.start} ${c.isBuy ? 'COMPRA' : 'VENTA'} ${c.steps} escalones, margen ${c.maxMargin}$, peor ${c.worst == null ? '-' : c.worst.toFixed(0)}$, ${c.isOpen ? 'abierta' : 'P/L ' + c.pnl.toFixed(2)}, rec. al empezar ${c.recStart || '-'}`),
+        '', `Pirámides: ${r.cycles.length} · media ${cs.avgSteps ? cs.avgSteps.toFixed(1) : '-'} escalones, máx ${cs.maxSteps} · margen máx ${cs.maxMargin} $ · peor latente ${cs.worst == null ? '-' : cs.worst.toFixed(0)} $`,
+        ...r.cycles.map((c) => `${c.start} ${c.isBuy ? 'COMPRA' : 'VENTA'} ${c.steps} escalones, margen ${c.maxMargin}$, peor ${c.worst == null ? '-' : c.worst.toFixed(0)}$, ${c.isOpen ? 'abierta' : 'P/L ' + c.pnl.toFixed(2)}, rec. al empezar ${c.recStart || '-'}`),
         '', 'Detalle:', ...r.rows.map((x) => `${x.openTime} ${x.isBuy ? 'COMPRA' : 'VENTA'} x${x.leverage} ${x.amount}$ → ${x.isOpen ? 'abierta' : x.closeTime} P/L ${x.pnl} · rec. al abrir ${x.recOpen || '-'} (${x.stageOpen || '-'}) · al cerrar ${x.recClose || '-'}`)];
       navigator.clipboard.writeText(lines.join('\n')).then(() => { $('rvCopy').textContent = 'Copiado'; }, () => { $('rvCopy').textContent = 'No se pudo copiar'; });
     };

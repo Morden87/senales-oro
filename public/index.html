@@ -86,7 +86,8 @@
   .pf-sum b { display: block; color: var(--text); font-size: 16px; font-variant-numeric: tabular-nums; }
   .pf-sum b.up { color: var(--buy); } .pf-sum b.dn { color: var(--sell); }
   table.pp td:first-child, table.pp th:first-child { text-align: left; }
-  table.pp td:not(:first-child) { white-space: nowrap; }
+  table.pp td:not(:first-child), table.pp th:not(:first-child) { white-space: nowrap; }
+  #rv table.pp { font-size: 12px; } #rv table.pp td, #rv table.pp th { padding: 5px 3px; }
   footer { text-align: center; color: var(--muted); font-size: 12px; margin-top: 8px; }
 </style>
 </head>
