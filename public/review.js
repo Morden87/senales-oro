@@ -32,8 +32,10 @@
       profitFactor: gl ? gw / gl : null, avgMinutes: mins.length ? mins.reduce((a, b) => a + b, 0) / mins.length : null };
   }
 
-  function analyze({ open = [], closed = [], c15 = [], params = {}, log = null }) {
-    const rows = [];
+  function analyze({ open = [], closed = [], c15 = [], params = {}, log = null, from = null }) {
+    const rows = [], fromT = sec(from);
+    // Solo cuentan las operaciones abiertas desde `from` (creación de Cortés).
+    if (fromT) { open = open.filter((p) => sec(p.openTime) >= fromT); closed = closed.filter((p) => sec(p.openTime) >= fromT); }
     for (const [p, isOpen] of [...closed.map((p) => [p, false]), ...open.map((p) => [p, true])]) {
       if (!isGold(p)) continue;
       const to = sec(p.openTime), tc = isOpen ? null : sec(p.closeTime);

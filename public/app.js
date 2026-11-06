@@ -109,7 +109,7 @@
     if (!cfg.proxy) return { error: 'Solo disponible con tu servidor de Cloudflare.' };
     if (!cfg.pin) return { error: 'Escribe tu PIN en Ajustes (⚙︎) para ver tus posiciones.' };
     try {
-      const r = await fetch('api/portfolio?days=30', { cache: 'no-store', headers: { 'x-admin-pin': cfg.pin } });
+      const r = await fetch('api/portfolio', { cache: 'no-store', headers: { 'x-admin-pin': cfg.pin } });
       const j = await r.json().catch(() => ({}));
       return r.ok ? j : { error: j.error || 'El servidor respondió ' + r.status };
     } catch { return { error: 'Sin conexión con el servidor.' }; }
@@ -127,11 +127,11 @@
     const o = p.open || [], c = p.closed || [];
     let html = `<div class="pf-sum"><div>Abiertas<b>${o.length}</b>${fmt(p.invested)} $</div>` +
       `<div>Resultado abierto<b class="${cls(p.unrealizedPnL)}">${money(p.unrealizedPnL)}</b>&nbsp;</div>` +
-      `<div>Cerradas ${p.days} días<b class="${cls(p.closedPnL)}">${money(p.closedPnL)}</b>${c.length} ${c.length === 1 ? 'operación' : 'operaciones'}</div></div>`;
+      `<div>Cerradas ${p.statsFrom ? 'desde ' + new Date(p.statsFrom).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit' }) : p.days + ' días'}<b class="${cls(p.closedPnL)}">${money(p.closedPnL)}</b>${c.length} ${c.length === 1 ? 'operación' : 'operaciones'}</div></div>`;
     html += '<h2 style="margin-top:4px">Abiertas</h2>' + (o.length ? o.map((x) => `<div class="pos"><div class="t"><b>${esc(x.name)}</b><span class="${cls(x.pnl)}">${money(x.pnl)}</span></div>` +
       `${side(x)} · ${fmt(x.amount)} $ · entrada ${fmt(x.openRate, x.openRate < 10 ? 4 : 2)}${x.rate != null ? ' · ahora ' + fmt(x.rate, x.rate < 10 ? 4 : 2) : ''}` +
       `<br>Abierta ${when(x.openTime)}${x.stopLoss ? ' · SL ' + fmt(x.stopLoss) : ''}${x.takeProfit ? ' · TP ' + fmt(x.takeProfit) : ''}</div>`).join('') : '<p>No tienes posiciones abiertas.</p>');
-    html += `<h2 style="margin-top:12px">Cerradas (últimos ${p.days} días)</h2>` + (p.historyError ? `<p>${esc(p.historyError)}</p>` : c.length ? c.slice(0, 30).map((x) => `<div class="pos"><div class="t"><b>${esc(x.name)}</b><span class="${cls(x.pnl)}">${money(x.pnl)}</span></div>` +
+    html += `<h2 style="margin-top:12px">Cerradas (${p.statsFrom ? 'desde el ' + new Date(p.statsFrom).toLocaleDateString('es-ES') : 'últimos ' + p.days + ' días'})</h2>` + (p.historyError ? `<p>${esc(p.historyError)}</p>` : c.length ? c.slice(0, 30).map((x) => `<div class="pos"><div class="t"><b>${esc(x.name)}</b><span class="${cls(x.pnl)}">${money(x.pnl)}</span></div>` +
       `${side(x)} · ${fmt(x.amount)} $ · ${fmt(x.openRate, x.openRate < 10 ? 4 : 2)} → ${fmt(x.closeRate, x.closeRate < 10 ? 4 : 2)}<br>${when(x.openTime)} → ${when(x.closeTime)}</div>`).join('') : '<p>No has cerrado ninguna posición en este periodo.</p>');
     html += `<p style="margin-top:10px">Cuenta ${p.account === 'demo' ? 'demo' : 'real'} · solo lectura · actualizado ${new Date(p.updatedAt).toLocaleTimeString('es-ES')}</p>`;
     el.innerHTML = html;
@@ -141,12 +141,13 @@
   async function loadReview() {
     const p = slow.pf;
     if (!p || p.error) return null;
-    if (!(p.open || []).concat(p.closed || []).some(RV.isGold)) return { rows: [], empty: true };
+    const from = p.statsFrom ? Date.parse(p.statsFrom) : 0;
+    if (!(p.open || []).concat(p.closed || []).some((x) => RV.isGold(x) && Date.parse(x.openTime) >= from)) return { rows: [], empty: true };
     if (slow.rv && Date.now() - slow.rvAt < 30 * 60000) return slow.rv;
     const [h, log] = await Promise.all([getJSON('api/history?days=30'), getJSON('api/recs')]);
     const c1 = ((h && h.candles) || []).map((k) => ({ time: k[0], open: k[1], high: k[2], low: k[3], close: k[4] }));
     const c15 = MV.resample(c1, 15).filter((k) => k.time + 900 <= Date.now() / 1000);
-    const res = RV.analyze({ open: p.open, closed: p.closed, c15, params, log });
+    const res = RV.analyze({ open: p.open, closed: p.closed, c15, params, log, from: p.statsFrom });
     res.from = c15.length ? c15[0].time : null;
     slow.rvAt = Date.now();
     return res;
@@ -156,9 +157,10 @@
     if (!cfg.proxy) { el.textContent = 'Solo disponible con tu servidor de Cloudflare.'; return; }
     if (!p || p.error) { el.textContent = p && p.error ? 'Hace falta ver tus posiciones primero (PIN en Ajustes).' : 'Cargando…'; return; }
     if (!r) { el.textContent = 'Cargando…'; return; }
-    if (r.empty) { el.textContent = `No hay operaciones de oro en los últimos ${p.days} días.`; return; }
+    const desde = p.statsFrom ? 'desde el ' + new Date(p.statsFrom).toLocaleDateString('es-ES') : `en los últimos ${p.days} días`;
+    if (r.empty) { el.textContent = `No hay operaciones de oro ${desde}.`; return; }
     const g = r.groups, rowG = (k) => { const x = g[k]; return x.n ? `<tr><td>${RV.GROUPS[k]}</td><td>${x.n}</td><td>${pct(x.winRate)}</td><td class="${cls(x.total)}">${money(x.total)}</td><td class="${cls(x.avg)}">${money(x.avg)}</td></tr>` : ''; };
-    let html = '<table class="pp"><tr><th>Cerradas</th><th>Nº</th><th>Ganadoras</th><th>Total</th><th>Media</th></tr>' +
+    let html = `<p style="margin:0 0 6px">Operaciones de oro abiertas ${desde} (creación de Cortés).</p>` + '<table class="pp"><tr><th>Cerradas</th><th>Nº</th><th>Ganadoras</th><th>Total</th><th>Media</th></tr>' +
       ['favor', 'contra', 'esperar', 'sin'].map(rowG).join('') +
       `<tr><td><b>Todas</b></td><td>${r.all.n}</td><td>${pct(r.all.winRate)}</td><td class="${cls(r.all.total)}">${money(r.all.total)}</td><td class="${cls(r.all.avg)}">${money(r.all.avg)}</td></tr></table>`;
     html += '<h2 style="margin-top:12px">Sugerencias</h2><ul style="margin:0;padding-left:18px">' + r.suggestions.map((s) => `<li style="margin:4px 0">${esc(s)}</li>`).join('') + '</ul>';
@@ -170,7 +172,7 @@
     html += '<div class="actions" style="justify-content:flex-start"><button id="rvCopy">Copiar resumen</button></div>';
     el.innerHTML = html;
     $('rvCopy').onclick = () => {
-      const lines = [`Operaciones de oro (últimos ${p.days} días):`, ...['favor', 'contra', 'esperar', 'sin'].filter((k) => g[k].n).map((k) => `- ${RV.GROUPS[k]}: ${g[k].n} ops, ${pct(g[k].winRate)} ganadoras, total ${money(g[k].total)}, media ${money(g[k].avg)}`),
+      const lines = [`Operaciones de oro ${desde}:`, ...['favor', 'contra', 'esperar', 'sin'].filter((k) => g[k].n).map((k) => `- ${RV.GROUPS[k]}: ${g[k].n} ops, ${pct(g[k].winRate)} ganadoras, total ${money(g[k].total)}, media ${money(g[k].avg)}`),
         '', 'Detalle:', ...r.rows.map((x) => `${x.openTime} ${x.isBuy ? 'COMPRA' : 'VENTA'} x${x.leverage} ${x.amount}$ → ${x.isOpen ? 'abierta' : x.closeTime} P/L ${x.pnl} · rec. al abrir ${x.recOpen || '-'} (${x.stageOpen || '-'}) · al cerrar ${x.recClose || '-'}`)];
       navigator.clipboard.writeText(lines.join('\n')).then(() => { $('rvCopy').textContent = 'Copiado'; }, () => { $('rvCopy').textContent = 'No se pudo copiar'; });
     };
