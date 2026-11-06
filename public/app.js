@@ -109,10 +109,10 @@
     if (!cfg.proxy) return { error: 'Solo disponible con tu servidor de Cloudflare.' };
     if (!cfg.pin) return { error: 'Escribe tu PIN en Ajustes (⚙︎) para ver tus posiciones.' };
     try {
-      const r = await fetch('api/portfolio', { cache: 'no-store', headers: { 'x-admin-pin': cfg.pin } });
+      const r = await fetch('api/portfolio', { cache: 'no-store', headers: { 'x-admin-pin': cfg.pin }, signal: AbortSignal.timeout ? AbortSignal.timeout(25000) : undefined });
       const j = await r.json().catch(() => ({}));
       return r.ok ? j : { error: j.error || 'El servidor respondió ' + r.status };
-    } catch { return { error: 'Sin conexión con el servidor.' }; }
+    } catch { return { error: 'El servidor o eToro no responden. Se reintentará en unos minutos.' }; }
   }
   const esc = (x) => String(x == null ? '' : x).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const money = (x) => (x == null || isNaN(x) ? '—' : (x > 0 ? '+' : '') + fmt(x) + '\u00a0$');
@@ -213,14 +213,28 @@
     if (navigator.vibrate) navigator.vibrate(200);
   }
 
+  // Tus posiciones y el análisis: nunca bloquean ni rompen el resto de la app.
+  function renderAccount() {
+    try { renderPortfolio(); } catch (e) { console.warn(e); $('pf').textContent = 'No se pudieron mostrar tus posiciones: ' + e.message; }
+    try { renderReview(); } catch (e) { console.warn(e); $('rv').textContent = 'No se pudo calcular el análisis: ' + e.message; }
+  }
+  let accountBusy = false;
+  async function refreshAccount() {
+    if (accountBusy) return; accountBusy = true;
+    try {
+      slow.pf = await loadPortfolio();
+      try { slow.rv = await loadReview(); } catch (e) { slow.rv = null; console.warn(e); }
+    } finally { accountBusy = false; renderAccount(); }
+  }
+
   async function refreshSlow() {
     if (Date.now() - slow.at < SLOW_MS) return;
     slow.at = Date.now();
     try { slow.c15 = (await Data.load(cfg, 15)).candles.filter((k) => k.time + 900 <= Date.now() / 1000); } catch { slow.c15 = null; }
     if (cfg.proxy) {
-      const [h, p, pf] = await Promise.all([getJSON('api/history?days=4'), getJSON('api/paper'), loadPortfolio()]);
-      slow.history = (h && h.candles) || []; slow.paper = p; slow.pf = pf;
-      try { slow.rv = await loadReview(); } catch (e) { slow.rv = null; console.warn(e); }
+      const [h, p] = await Promise.all([getJSON('api/history?days=4'), getJSON('api/paper')]);
+      slow.history = (h && h.candles) || []; slow.paper = p;
+      refreshAccount(); // en segundo plano: si eToro tarda, el resto de la app no espera
     }
   }
 
@@ -228,7 +242,7 @@
     if (busy) return; busy = true; $('refresh').disabled = true;
     try {
       await refreshSlow();
-      renderPortfolio(); renderReview();
+      renderAccount();
       const res = await Data.load(cfg, 1);
       showError(''); render(res);
     } catch (e) {
