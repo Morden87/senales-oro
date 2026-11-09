@@ -188,6 +188,11 @@
       <input id="pin" type="password" inputmode="numeric" autocomplete="off">
       <p class="sub">Es el secreto ADMIN_PIN de Cloudflare. También sirve para ver tus posiciones de eToro.</p>
     </div>
+    <div id="ntfyBox">
+      <h2 style="margin-top:16px">Avisos por ntfy</h2>
+      <p class="sub" id="ntfyState">Comprobando…</p>
+      <div class="actions" style="justify-content:flex-start"><button type="button" id="ntfyTest">Enviar aviso de prueba</button></div>
+    </div>
     <label class="chk"><input type="checkbox" id="notify"> Avisarme en el móvil cuando el movimiento esperado pase a ALTO (con la app abierta)</label>
     <div class="actions"><button value="cancel">Cancelar</button><button value="ok" class="primary" id="save">Guardar</button></div>
   </form>

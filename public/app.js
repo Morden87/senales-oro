@@ -260,11 +260,36 @@
     $('mode').value = params.mode; $('threshold').value = String(params.threshold); $('agree').value = String(params.agree);
     $('htf').checked = !!params.htf; $('pin').value = cfg.pin; $('notify').checked = !!cfg.notify;
     $('pinBox').style.display = cfg.proxy ? '' : 'none';
+    $('ntfyBox').style.display = cfg.proxy ? '' : 'none';
     $('etoroBox').style.display = cfg.source === 'etoro' ? '' : 'none';
     $('keysBox').style.display = cfg.proxy ? 'none' : '';
     $('proxyState').textContent = cfg.proxy ? 'Conectado a través de tu servidor: las claves están guardadas allí, no en el móvil.' : '';
   }
-  function openSettings() { syncSettingsUI(); $('settings').showModal(); }
+  // Estado de los avisos de ntfy (los envía el servidor cada 15 min, con el móvil apagado).
+  const ago = (iso) => { const m = Math.round((Date.now() - Date.parse(iso)) / 60000); return m < 1 ? 'ahora' : m < 90 ? `hace ${m} min` : `hace ${Math.round(m / 60)} h`; };
+  function ntfyText(s) {
+    if (!s) return 'No se pudo leer el estado del servidor.';
+    const out = [s.ntfy ? `Tema configurado: ${s.ntfy.topic} en ${s.ntfy.server}.` : 'Falta el secreto NTFY_TOPIC en Cloudflare: sin él no se envía ningún aviso.'];
+    if (!s.etoroKeys) out.push('Faltan las claves de eToro en Cloudflare.');
+    out.push(s.cronLast ? `Última comprobación automática ${ago(s.cronLast.t)}: ${s.cronLast.result}.` : 'El servidor aún no ha registrado ninguna comprobación automática (o es anterior a esta versión).');
+    if (s.cronLast && Date.now() - Date.parse(s.cronLast.t) > 40 * 60000) out.push('⚠︎ Lleva más de 40 min sin comprobar: revisa en Cloudflare que el Worker tenga el cron */15 activo y no dé errores.');
+    if (s.ntfyLast) out.push(`Último aviso ${ago(s.ntfyLast.t)}: «${s.ntfyLast.title}» ${s.ntfyLast.ok ? 'enviado' : 'FALLÓ: ' + s.ntfyLast.error}.`);
+    out.push('Solo se avisa al cambiar: COMPRAR/VENDER/ESPERAR o movimiento de la próxima hora a ALTO y de vuelta.');
+    return out.join(' ');
+  }
+  async function loadNtfyState() { if (cfg.proxy) $('ntfyState').textContent = ntfyText(await getJSON('api/status')); }
+  $('ntfyTest').addEventListener('click', async () => {
+    const pin = $('pin').value.trim();
+    if (!pin) { $('ntfyState').textContent = 'Escribe tu PIN arriba para enviar la prueba.'; return; }
+    $('ntfyTest').disabled = true; $('ntfyState').textContent = 'Enviando…';
+    try {
+      const r = await fetch('api/ntfy-test?run=1', { method: 'POST', headers: { 'x-admin-pin': pin } });
+      const j = await r.json().catch(() => ({}));
+      $('ntfyState').textContent = (r.ok ? 'Prueba enviada: debería llegarte ya al móvil. Si no llega, revisa que en la app ntfy estés suscrito exactamente al mismo tema. ' : 'La prueba falló: ' + (j.error || 'el servidor respondió ' + r.status) + '. ') + (j.status ? ntfyText(j.status) : '');
+    } catch (e) { $('ntfyState').textContent = 'La prueba falló: ' + e.message; }
+    finally { $('ntfyTest').disabled = false; }
+  });
+  function openSettings() { syncSettingsUI(); loadNtfyState(); $('settings').showModal(); }
   $('source').addEventListener('change', () => { $('etoroBox').style.display = $('source').value === 'etoro' ? '' : 'none'; });
   $('openSettings').addEventListener('click', openSettings);
   $('settings').addEventListener('close', async () => {
