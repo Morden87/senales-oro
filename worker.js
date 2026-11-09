@@ -4,6 +4,7 @@
 // cuando se espera mucho movimiento y sigue en papel la ruptura de 1 h a favor de la tendencia diaria.
 import './public/indicators.js'; // define globalThis.GoldTA
 import './public/movement.js'; // define globalThis.GoldMove
+import './public/pyramid.js'; // define globalThis.GoldPyr
 
 const ETORO = 'https://public-api.etoro.com';
 const GOLD_ID_FALLBACK = 18;
@@ -157,8 +158,8 @@ async function movementAlert(env, c1, c15) {
 }
 
 // Avisa cuando la recomendación (velas de 15 min + tendencia de 1 h) pasa a COMPRAR o VENDER, y cuando vuelve a ESPERAR.
-async function directionAlert(env, c15) {
-  const r = globalThis.GoldTA.stableSignal(c15, await getParams(env));
+async function directionAlert(env, c15, pyr = null, signal = null) {
+  const r = signal || globalThis.GoldTA.stableSignal(c15, await getParams(env));
   const prev = (await env.STATE.get('recAction')) || 'ESPERAR';
   // Registro de recomendaciones (cada cambio), para comparar luego con tus operaciones reales.
   const log = JSON.parse((await env.STATE.get('recLog')) || 'null');
@@ -169,13 +170,54 @@ async function directionAlert(env, c15) {
     await env.STATE.put('recLog', JSON.stringify(next));
   }
   if (r.action === prev) return 'dirección ' + r.action;
-  if (!ntfyTarget(env)) { await env.STATE.put('recAction', r.action); return `${prev} -> ${r.action}`; }
+  // Con una pirámide abierta los cambios de COMPRAR/VENDER/ESPERAR no se avisan: de eso se encarga pyramidAlert.
+  if (pyr || !ntfyTarget(env)) { await env.STATE.put('recAction', r.action); return `${prev} -> ${r.action}`; }
   const px = fmt(r.price);
   await ntfy(env, r.action === 'ESPERAR'
     ? { title: `Cortés: fin de ${prev} en el oro`, message: `Precio ${px} $. Ahora ESPERAR: ${r.reason}.`, tags: ['pause_button'], priority: 3 }
     : { title: `Cortés: ${r.action} oro`, message: `Precio ${px} $. ${r.reason}.\nRecomendación informativa, sin ventaja probada en el histórico. No es asesoramiento financiero.`, tags: [r.action === 'COMPRAR' ? 'chart_with_upwards_trend' : 'chart_with_downwards_trend'], priority: 4 });
   await env.STATE.put('recAction', r.action); // tras enviar: si ntfy falla, se reintenta en la próxima comprobación
   return `${prev} -> ${r.action} (aviso enviado)`;
+}
+
+// ---------- Pirámide de posiciones (lee tu cartera de eToro, solo lectura) ----------
+const pyrOpts = (env) => ({
+  mode: String(env.PYR_MODE || 'contra').toLowerCase() === 'favor' ? 'favor' : 'contra',
+  step: +(env.PYR_STEP || 20), maxSteps: +(env.PYR_MAX_STEPS || 5), maxLoss: +(env.PYR_MAX_LOSS || 0),
+});
+
+// Tus posiciones abiertas de oro (propias, no copiadas).
+async function goldPositions(env) {
+  const demo = String(env.ETORO_ACCOUNT || 'real').toLowerCase() === 'demo';
+  const [r, id] = await Promise.all([etoro(env, `/api/v1/trading/info/${demo ? 'demo' : 'real'}/pnl`), goldId(env)]);
+  if (!r.ok) throw new Error('eToro respondió ' + r.status + ' al leer la cartera');
+  const cp = (await r.json()).clientPortfolio || {};
+  return (cp.positions || []).map(openPosition).filter((p) => +p.instrumentId === +id && !p.copied);
+}
+
+// Detecta la pirámide y avisa de escalones, stop, vuelta a precio medio y tendencia en contra.
+// Devuelve el estado de la pirámide (o null si no hay), para silenciar los avisos normales mientras esté abierta.
+async function pyramidAlert(env, price, action) {
+  if (!env.ETORO_API_KEY || !env.ETORO_USER_KEY) return { cur: null, text: 'pirámide: sin claves' };
+  const o = pyrOpts(env);
+  const cur = globalThis.GoldPyr.state(await goldPositions(env), price, o);
+  const prev = JSON.parse((await env.STATE.get('pyr')) || 'null');
+  const { alerts, memo } = globalThis.GoldPyr.decide(prev, cur, price, action, o);
+  if (alerts.length && ntfyTarget(env)) {
+    for (const a of alerts) await ntfy(env, a); // si ntfy falla, no se guarda y se reintenta en la próxima comprobación
+  }
+  if (memo) await env.STATE.put('pyr', JSON.stringify(memo)); else if (prev) await env.STATE.delete('pyr');
+  const text = cur ? `pirámide: ${cur.side} ${cur.steps} esc., medio ${fmt(cur.avg)}` : 'pirámide: no';
+  return { cur, text: text + (alerts.length ? ` (${alerts.length} aviso${alerts.length > 1 ? 's' : ''})` : '') };
+}
+
+// Comprobación ligera entre las de 15 min: solo la pirámide, con el último precio y la última recomendación guardada.
+async function pyramidOnly(env) {
+  if (!env.ETORO_API_KEY || !env.ETORO_USER_KEY) return 'pirámide: sin claves';
+  const c1 = closedOnly(await fetchCandles(env, 5), 'OneMinute');
+  if (!c1.length || Date.now() / 1000 - c1[c1.length - 1].time > 20 * 60) return 'mercado cerrado';
+  const action = (await env.STATE.get('recAction')) || 'ESPERAR';
+  return (await pyramidAlert(env, c1[c1.length - 1].close, action)).text;
 }
 
 // Ruptura de 1 h en papel: abre al cierre de la vela de 1 h y cierra 4 h después con el precio de ese momento.
@@ -211,14 +253,21 @@ async function checkAndNotify(env) {
   if (!c1.length || Date.now() / 1000 - c1[c1.length - 1].time > 20 * 60) return 'mercado cerrado';
   // Cada parte por separado: un fallo en una (p. ej. ntfy) no impide las demás.
   const a = await movementAlert(env, c1, c15).catch((e) => 'movimiento: ERROR ' + e.message);
-  const d = await directionAlert(env, c15).catch((e) => 'dirección: ERROR ' + e.message);
+  // La pirámide va antes que la dirección: si está abierta, los cambios de COMPRAR/VENDER/ESPERAR no se avisan.
+  // Si no se puede leer la cartera, se sigue con los avisos normales.
+  let sig = null;
+  try { sig = globalThis.GoldTA.stableSignal(c15, await getParams(env)); } catch { /* sin recomendación */ }
+  const p = await pyramidAlert(env, c1[c1.length - 1].close, sig ? sig.action : 'ESPERAR').catch((e) => ({ cur: null, text: 'pirámide: ERROR ' + e.message }));
+  const d = await directionAlert(env, c15, p.cur, sig).catch((e) => 'dirección: ERROR ' + e.message);
   const b = await paperBreakout(env, c1).catch((e) => 'papel: ERROR ' + e.message);
-  return a + ' · ' + d + ' · ' + b;
+  return a + ' · ' + p.text + ' · ' + d + ' · ' + b;
 }
 
-async function runCron(env) {
+// El cron va cada 5 min: la comprobación completa en la primera de cada cuarto de hora, y en las otras solo la pirámide.
+async function runCron(env, time = Date.now()) {
   let result, ok = true;
-  try { result = await checkAndNotify(env); } catch (e) { ok = false; result = 'ERROR ' + e.message; }
+  const full = new Date(time).getUTCMinutes() % 15 < 5;
+  try { result = full ? await checkAndNotify(env) : await pyramidOnly(env); } catch (e) { ok = false; result = 'ERROR ' + e.message; }
   if (result.includes('ERROR')) ok = false;
   await env.STATE.put('cronLast', JSON.stringify({ t: new Date().toISOString(), ok, result })).catch(() => {});
   (ok ? console.log : console.error)('cron:', result);
@@ -234,6 +283,7 @@ async function status(env) {
     etoroKeys: Boolean(env.ETORO_API_KEY && env.ETORO_USER_KEY),
     cronLast: JSON.parse(cron || 'null'), ntfyLast: JSON.parse(last || 'null'),
     moveLevel: await env.STATE.get('moveLevel'), recAction: await env.STATE.get('recAction'),
+    pyramid: { ...pyrOpts(env), last: JSON.parse((await env.STATE.get('pyr')) || 'null') },
   };
 }
 
@@ -347,7 +397,7 @@ export default {
       try {
         await ntfy(env, { title: 'Cortés: aviso de prueba', message: 'Si ves esto, los avisos de ntfy funcionan.', tags: ['white_check_mark'], priority: 3 });
       } catch (e) { return json({ ok: false, error: e.message, status: await status(env) }, 502); }
-      const run = url.searchParams.get('run') ? await runCron(env) : null;
+      const run = url.searchParams.get('run') ? await runCron(env, 0) : null; // 0: siempre la comprobación completa
       return json({ ok: true, run, status: await status(env) });
     }
     if (url.pathname.endsWith('/api/recs')) {
@@ -383,8 +433,8 @@ export default {
   },
 
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(runCron(env));
+    ctx.waitUntil(runCron(env, event.scheduledTime));
   },
 };
 
-export { checkAndNotify, directionAlert, runCron, ntfyTarget, status };
+export { checkAndNotify, directionAlert, runCron, ntfyTarget, status, pyramidAlert };
