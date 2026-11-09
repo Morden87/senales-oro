@@ -56,13 +56,17 @@ async function storeHistory(env, candles) {
     if (!byDay.has(key)) byDay.set(key, []);
     byDay.get(key).push([k.time, k.open, k.high, k.low, k.close]);
   }
+  // Para ahorrar CPU (plan gratuito: 10 ms por ejecución) no se parsea el día entero: las filas están
+  // ordenadas, así que basta con leer la hora de la última y añadir detrás las posteriores como texto.
   for (const [key, rows] of byDay) {
-    const old = JSON.parse((await env.STATE.get(key)) || '[]');
-    const seen = new Set(old.map((r) => r[0]));
-    const add = rows.filter((r) => !seen.has(r[0]));
+    const old = (await env.STATE.get(key)) || '[]';
+    const tail = old.length > 2 ? old.slice(old.lastIndexOf('['), -1) : '';
+    const last = tail ? +JSON.parse(tail)[0] : -Infinity;
+    const add = rows.filter((r) => r[0] > last);
     if (!add.length) continue;
-    const merged = old.concat(add).sort((a, b) => a[0] - b[0]);
-    await env.STATE.put(key, JSON.stringify(merged), { expirationTtl: (HISTORY_DAYS_MAX + 2) * 86400 });
+    const addText = JSON.stringify(add).slice(1, -1);
+    const merged = old.length > 2 ? old.slice(0, -1) + ',' + addText + ']' : '[' + addText + ']';
+    await env.STATE.put(key, merged, { expirationTtl: (HISTORY_DAYS_MAX + 2) * 86400 });
   }
 }
 
@@ -98,14 +102,34 @@ function cleanParams(p) {
 const fmt = (x, d = 2) => (x == null || !isFinite(x) ? '—' : x.toFixed(d));
 const pct = (x) => Math.round(x * 100) + '%';
 
+// Acepta el tema solo ("mi-tema") o la dirección completa ("https://ntfy.sh/mi-tema"), con espacios o barras de sobra.
+function ntfyTarget(env) {
+  let topic = String(env.NTFY_TOPIC || '').trim().replace(/^["']|["']$/g, '');
+  let server = String(env.NTFY_SERVER || 'https://ntfy.sh').trim().replace(/\/+$/, '');
+  if (!topic) return null;
+  if (topic.includes('/')) {
+    const full = /^https?:\/\//i.test(topic) ? topic : 'https://' + topic.replace(/^\/+/, '');
+    try { const u = new URL(full); server = u.origin; topic = u.pathname.split('/').filter(Boolean).pop() || ''; } catch { /* se queda como está */ }
+  }
+  return topic ? { server, topic } : null;
+}
+
 async function ntfy(env, { title, message, tags, priority }) {
+  const target = ntfyTarget(env);
+  if (!target) throw new Error('Falta el secreto NTFY_TOPIC en Cloudflare');
   const headers = { 'content-type': 'application/json' };
-  if (env.NTFY_TOKEN) headers.authorization = 'Bearer ' + env.NTFY_TOKEN;
-  const r = await fetch((env.NTFY_SERVER || 'https://ntfy.sh').replace(/\/$/, ''), {
-    method: 'POST', headers,
-    body: JSON.stringify({ topic: env.NTFY_TOPIC, title, message, tags, priority, click: env.APP_URL || undefined }),
-  });
-  if (!r.ok) throw new Error('ntfy respondió ' + r.status);
+  if (env.NTFY_TOKEN) headers.authorization = 'Bearer ' + String(env.NTFY_TOKEN).trim();
+  let error = null;
+  try {
+    const r = await fetch(target.server, {
+      method: 'POST', headers,
+      body: JSON.stringify({ topic: target.topic, title, message, tags, priority, click: env.APP_URL || undefined }),
+    });
+    if (!r.ok) error = 'ntfy respondió ' + r.status + ': ' + (await r.text().catch(() => '')).slice(0, 200);
+  } catch (e) { error = 'No se pudo contactar con ntfy: ' + e.message; }
+  // Último envío, para verlo en GET /api/status.
+  await env.STATE.put('ntfyLast', JSON.stringify({ t: new Date().toISOString(), title, ok: !error, error })).catch(() => {});
+  if (error) throw new Error(error);
 }
 
 const refs = (env) => ({ m15: +(env.REF_15M || 5), h1: +(env.REF_1H || 10), h4: +(env.REF_4H || 20) });
@@ -116,8 +140,11 @@ async function movementAlert(env, c1, c15) {
   const h1 = f.find((x) => x.id === 'h1'); if (!h1) return 'sin previsión';
   const prev = (await env.STATE.get('moveLevel')) || 'BAJO';
   const now = h1.level;
-  if (now !== prev) await env.STATE.put('moveLevel', now);
-  if (!env.NTFY_TOPIC || (now === 'ALTO') === (prev === 'ALTO')) return `${prev} -> ${now}`;
+  // Sin cambio entre ALTO y no ALTO no hay aviso; si lo hay, el nivel se guarda tras enviarlo, así un fallo de ntfy se reintenta.
+  if ((now === 'ALTO') === (prev === 'ALTO') || !ntfyTarget(env)) {
+    if (now !== prev) await env.STATE.put('moveLevel', now);
+    return `${prev} -> ${now}`;
+  }
   const lines = f.map((x) => `${x.label}: rango ~${fmt(x.range, 0)} $ · ${pct(x.prob)} de alejarse ≥${x.ref} $`).join('\n');
   // La dirección la da la recomendación de la app (velas de 15 min y tendencia de 1 h), solo como contexto.
   let rec = '';
@@ -125,6 +152,7 @@ async function movementAlert(env, c1, c15) {
   await ntfy(env, now === 'ALTO'
     ? { title: 'Cortés: se espera mucho movimiento en el oro', message: `Precio ${fmt(h1.price)} $.\n${lines}\nEste aviso indica tamaño, no dirección: puede ser hacia arriba o hacia abajo.${rec}`, tags: ['zap'], priority: 4 }
     : { title: 'Cortés: el oro se calma', message: `Precio ${fmt(h1.price)} $.\n${lines}`, tags: ['zzz'], priority: 2 });
+  await env.STATE.put('moveLevel', now);
   return `${prev} -> ${now} (aviso enviado)`;
 }
 
@@ -141,12 +169,12 @@ async function directionAlert(env, c15) {
     await env.STATE.put('recLog', JSON.stringify(next));
   }
   if (r.action === prev) return 'dirección ' + r.action;
-  await env.STATE.put('recAction', r.action);
-  if (!env.NTFY_TOPIC) return `${prev} -> ${r.action}`;
+  if (!ntfyTarget(env)) { await env.STATE.put('recAction', r.action); return `${prev} -> ${r.action}`; }
   const px = fmt(r.price);
   await ntfy(env, r.action === 'ESPERAR'
     ? { title: `Cortés: fin de ${prev} en el oro`, message: `Precio ${px} $. Ahora ESPERAR: ${r.reason}.`, tags: ['pause_button'], priority: 3 }
     : { title: `Cortés: ${r.action} oro`, message: `Precio ${px} $. ${r.reason}.\nRecomendación informativa, sin ventaja probada en el histórico. No es asesoramiento financiero.`, tags: [r.action === 'COMPRAR' ? 'chart_with_upwards_trend' : 'chart_with_downwards_trend'], priority: 4 });
+  await env.STATE.put('recAction', r.action); // tras enviar: si ntfy falla, se reintenta en la próxima comprobación
   return `${prev} -> ${r.action} (aviso enviado)`;
 }
 
@@ -181,10 +209,32 @@ async function checkAndNotify(env) {
   await storeHistory(env, raw1);
   const c1 = closedOnly(raw1, 'OneMinute'), c15 = closedOnly(raw15, 'FifteenMinutes');
   if (!c1.length || Date.now() / 1000 - c1[c1.length - 1].time > 20 * 60) return 'mercado cerrado';
-  const a = await movementAlert(env, c1, c15);
-  const d = await directionAlert(env, c15).catch((e) => 'dirección: ' + e.message);
-  const b = await paperBreakout(env, c1);
+  // Cada parte por separado: un fallo en una (p. ej. ntfy) no impide las demás.
+  const a = await movementAlert(env, c1, c15).catch((e) => 'movimiento: ERROR ' + e.message);
+  const d = await directionAlert(env, c15).catch((e) => 'dirección: ERROR ' + e.message);
+  const b = await paperBreakout(env, c1).catch((e) => 'papel: ERROR ' + e.message);
   return a + ' · ' + d + ' · ' + b;
+}
+
+async function runCron(env) {
+  let result, ok = true;
+  try { result = await checkAndNotify(env); } catch (e) { ok = false; result = 'ERROR ' + e.message; }
+  if (result.includes('ERROR')) ok = false;
+  await env.STATE.put('cronLast', JSON.stringify({ t: new Date().toISOString(), ok, result })).catch(() => {});
+  (ok ? console.log : console.error)('cron:', result);
+  return { ok, result };
+}
+
+async function status(env) {
+  const target = ntfyTarget(env);
+  const [cron, last] = await Promise.all([env.STATE.get('cronLast'), env.STATE.get('ntfyLast')]);
+  const mask = (t) => (t.length <= 4 ? '****' : t.slice(0, 2) + '…' + t.slice(-2) + ` (${t.length} caracteres)`);
+  return {
+    ntfy: target ? { server: target.server, topic: mask(target.topic), token: !!env.NTFY_TOKEN } : null,
+    etoroKeys: Boolean(env.ETORO_API_KEY && env.ETORO_USER_KEY),
+    cronLast: JSON.parse(cron || 'null'), ntfyLast: JSON.parse(last || 'null'),
+    moveLevel: await env.STATE.get('moveLevel'), recAction: await env.STATE.get('recAction'),
+  };
 }
 
 // ---------- Cartera de eToro (solo lectura) ----------
@@ -287,6 +337,19 @@ export default {
       const days = Math.min(364, Math.max(1, +url.searchParams.get('days') || auto));
       try { return json(await portfolio(env, days)); } catch (e) { return json({ error: e.message }, e.status || 500); }
     }
+    // Estado de los avisos: última comprobación programada y último envío a ntfy.
+    if (url.pathname.endsWith('/api/status')) return json(await status(env));
+    // Aviso de prueba (con PIN). Con ?run=1 además hace ahora mismo la comprobación de cada 15 min.
+    if (url.pathname.endsWith('/api/ntfy-test')) {
+      if (request.method !== 'POST') return json({ error: 'No permitido' }, 405);
+      if (!env.ADMIN_PIN) return json({ error: 'Falta el secreto ADMIN_PIN en Cloudflare' }, 501);
+      if (request.headers.get('x-admin-pin') !== env.ADMIN_PIN) return json({ error: 'PIN incorrecto' }, 403);
+      try {
+        await ntfy(env, { title: 'Cortés: aviso de prueba', message: 'Si ves esto, los avisos de ntfy funcionan.', tags: ['white_check_mark'], priority: 3 });
+      } catch (e) { return json({ ok: false, error: e.message, status: await status(env) }, 502); }
+      const run = url.searchParams.get('run') ? await runCron(env) : null;
+      return json({ ok: true, run, status: await status(env) });
+    }
     if (url.pathname.endsWith('/api/recs')) {
       return new Response((await env.STATE.get('recLog')) || 'null', { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
     }
@@ -320,8 +383,8 @@ export default {
   },
 
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(checkAndNotify(env).then((r) => console.log('cron:', r), (e) => console.error('cron:', e.message)));
+    ctx.waitUntil(runCron(env));
   },
 };
 
-export { checkAndNotify, directionAlert };
+export { checkAndNotify, directionAlert, runCron, ntfyTarget, status };

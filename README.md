@@ -66,6 +66,8 @@ Cada 15 minutos (`*/15 * * * *`, cron de Cloudflare) el Worker descarga velas de
 
 Solo se recomienda COMPRAR o VENDER si el recorrido probable en 15 min (ATR × √15) es de al menos `MIN_MOVE` dólares (5 por defecto, también ajustable en Ajustes de la app); el objetivo se fija a esa distancia como mínimo.
 
+**Si no llegan los avisos**: abre Ajustes (⚙︎) en la app. La sección *Avisos por ntfy* muestra si el servidor tiene el tema configurado, cuándo fue la última comprobación automática y si el último envío funcionó o qué respondió ntfy. El botón *Enviar aviso de prueba* (pide el PIN) manda un aviso al momento y lanza la comprobación. Lo mismo en `GET /api/status` y `POST /api/ntfy-test?run=1` (cabecera `x-admin-pin`). `NTFY_TOPIC` puede ser solo el nombre del tema o la dirección completa (`https://ntfy.sh/tu-tema`). Si ntfy falla, el cambio de estado no se da por avisado y se reintenta en la siguiente comprobación.
+
 Opcional: `NTFY_SERVER` (en `[vars]`, por defecto https://ntfy.sh), el secreto `NTFY_TOKEN` si tu servidor pide autenticación, `APP_URL` para abrir la app al tocar el aviso y `THRESHOLD` para la exigencia (0.22 por defecto).
 
 Abre en Chrome de Android la URL `https://senales-oro.<tu-cuenta>.workers.dev` → menú ⋮ → **Añadir a pantalla de inicio**.
