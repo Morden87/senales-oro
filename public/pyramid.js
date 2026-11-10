@@ -43,8 +43,9 @@
   }
 
   // prev: lo guardado en la comprobación anterior (o null). cur: state() de ahora (o null). action: recomendación actual.
+  // range: { lo, hi } mínimo y máximo del precio desde la comprobación anterior, para no perder un toque breve entre comprobaciones.
   // Devuelve { alerts: [{ title, message, tags, priority }], memo } con memo = lo que hay que guardar para la próxima vez.
-  function decide(prev, cur, price, action, opts = {}) {
+  function decide(prev, cur, price, action, opts = {}, range = null) {
     const o = { ...DEFAULTS, ...opts };
     const alerts = [];
     if (!cur) {
@@ -78,31 +79,35 @@
       }
     }
     if (isFinite(price)) {
+      const lo = range && isFinite(range.lo) ? Math.min(range.lo, price) : price;
+      const hi = range && isFinite(range.hi) ? Math.max(range.hi, price) : price;
+      const worst = cur.isBuy ? lo : hi, best = cur.isBuy ? hi : lo; // lo más en contra y lo más a favor desde la última comprobación
       // 1) Stop de la pirámide.
-      const hitStop = dir * (price - cur.stopLevel) <= 0;
+      const hitStop = dir * (worst - cur.stopLevel) <= 0;
       if (hitStop && !m.stop) {
         alerts.push({ title: `Cortés: STOP de la pirámide de ${cur.side}`, priority: 5, tags: ['rotating_light'],
-          message: `El oro está a ${f2(price)} $, en el stop de ${f2(cur.stopLevel)} $. Resultado ${usd(cur.pnl)}.\n` +
+          message: `El oro ha llegado a ${f2(worst)} $ (stop en ${f2(cur.stopLevel)} $; ahora ${f2(price)} $). Resultado ahora ${usd(cur.pnl)}.\n` +
             (cur.mode === 'contra' ? `El precio ha pasado el último escalón de tu plan (${cur.maxSteps} de ${cur.step} $). Cierra la pirámide antes de que la pérdida crezca más.` : 'El precio ha deshecho el último escalón: es momento de cerrar.') });
         m.stop = true;
       }
       // 2) Siguiente escalón.
-      const reached = !hitStop && (cur.mode === 'favor' ? dir * (price - cur.nextLevel) >= 0 : dir * (price - cur.nextLevel) <= 0);
+      const touch = cur.mode === 'favor' ? best : worst;
+      const reached = !hitStop && (cur.mode === 'favor' ? dir * (touch - cur.nextLevel) >= 0 : dir * (touch - cur.nextLevel) <= 0);
       if (reached && !m.next) {
         if (cur.steps >= cur.maxSteps) {
           alerts.push({ title: `Cortés: límite de ${cur.maxSteps} escalones`, priority: 4, tags: ['no_entry'],
-            message: `El oro está a ${f2(price)} $, donde tocaría el escalón ${cur.steps + 1}, pero ya tienes el máximo. No añadas más.\n${summary}` });
+            message: `El oro ha llegado a ${f2(touch)} $ (ahora ${f2(price)} $), donde tocaría el escalón ${cur.steps + 1}, pero ya tienes el máximo. No añadas más.\n${summary}` });
         } else {
           const warn = against ? `\nOjo: Cortés está en ${action}, con 15 min y 1 h en tu contra.` + (cur.mode === 'contra' ? ' Añadir ahora es promediar contra la tendencia; mejor esperar.' : ' Mejor no añadir.') : '';
           alerts.push({ title: `Cortés: nivel del escalón ${cur.steps + 1}`, priority: against ? 3 : 4, tags: ['ladder'],
-            message: `El oro está a ${f2(price)} $ (nivel ${f2(cur.nextLevel)} $). Si sigues el plan, añade otro escalón.${warn}\n${summary}` });
+            message: `El oro ha llegado a ${f2(touch)} $ (nivel ${f2(cur.nextLevel)} $; ahora ${f2(price)} $). Si sigues el plan, añade otro escalón.${warn}\n${summary}` });
         }
         m.next = true;
       }
       // 3) En "contra": vuelta al precio medio tras haber estado medio escalón por debajo.
       if (cur.mode === 'contra') {
-        if (dir * (price - cur.avg) <= -cur.step / 2) m.down = true;
-        if (m.down && dir * (price - cur.avg) >= 0) {
+        if (dir * (worst - cur.avg) <= -cur.step / 2) m.down = true;
+        if (m.down && dir * (best - cur.avg) >= 0) {
           alerts.push({ title: 'Cortés: la pirámide vuelve a precio medio', priority: 4, tags: ['white_check_mark'],
             message: `El oro está a ${f2(price)} $, por ${cur.isBuy ? 'encima' : 'debajo'} de tu precio medio (${f2(cur.avg)} $). Resultado ${usd(cur.pnl)}.\nBuen momento para cerrar o asegurar la pirámide.` });
           m.down = false;
