@@ -128,6 +128,16 @@
     let html = `<div class="pf-sum"><div>Abiertas<b>${o.length}</b>${fmt(p.invested)} $</div>` +
       `<div>Resultado abierto<b class="${cls(p.unrealizedPnL)}">${money(p.unrealizedPnL)}</b>&nbsp;</div>` +
       `<div>Cerradas ${p.statsFrom ? 'desde ' + new Date(p.statsFrom).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit' }) : p.days + ' días'}<b class="${cls(p.closedPnL)}">${money(p.closedPnL)}</b>${c.length} ${c.length === 1 ? 'operación' : 'operaciones'}</div></div>`;
+    // Pirámide de oro: precio medio y TP común para ganar un 5 % de lo invertido.
+    const gold = o.filter((x) => RV.isGold(x) && !x.copied);
+    const now = gold.find((x) => x.rate != null);
+    const py = gold.length && window.GoldPyr ? window.GoldPyr.state(gold, now ? now.rate : NaN, p.pyramid || {}) : null;
+    if (py && py.tpLevel) {
+      html += `<div class="pos" style="border-left:3px solid var(--buy)"><div class="t"><b>Pirámide de oro · ${py.side.toLowerCase()} · ${py.steps} ${py.steps > 1 ? 'escalones' : 'escalón'}</b><span class="${cls(py.pnl)}">${money(py.pnl)}</span></div>` +
+        `Invertido ${fmt(py.invested)} $ · precio medio ${fmt(py.avg)}` +
+        `<br><b>TP para +${py.tpPct} % (${money(py.tpProfit)}): ${fmt(py.tpLevel)}</b>` +
+        `<br>Pon ese TP en todas las posiciones de oro y se cierran juntas con esa ganancia (sin contar comisiones ni el diferencial). Si añades un escalón, el TP cambia.</div>`;
+    }
     html += '<h2 style="margin-top:4px">Abiertas</h2>' + (o.length ? o.map((x) => `<div class="pos"><div class="t"><b>${esc(x.name)}</b><span class="${cls(x.pnl)}">${money(x.pnl)}</span></div>` +
       `${side(x)} · ${fmt(x.amount)} $ · entrada ${fmt(x.openRate, x.openRate < 10 ? 4 : 2)}${x.rate != null ? ' · ahora ' + fmt(x.rate, x.rate < 10 ? 4 : 2) : ''}` +
       `<br>Abierta ${when(x.openTime)}${x.stopLoss ? ' · SL ' + fmt(x.stopLoss) : ''}${x.takeProfit ? ' · TP ' + fmt(x.takeProfit) : ''}</div>`).join('') : '<p>No tienes posiciones abiertas.</p>');

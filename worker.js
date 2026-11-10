@@ -183,7 +183,7 @@ async function directionAlert(env, c15, pyr = null, signal = null) {
 // ---------- Pirámide de posiciones (lee tu cartera de eToro, solo lectura) ----------
 const pyrOpts = (env) => ({
   mode: String(env.PYR_MODE || 'contra').toLowerCase() === 'favor' ? 'favor' : 'contra',
-  step: +(env.PYR_STEP || 20), maxSteps: +(env.PYR_MAX_STEPS || 5), maxLoss: +(env.PYR_MAX_LOSS || 0),
+  step: +(env.PYR_STEP || 20), maxSteps: +(env.PYR_MAX_STEPS || 5), maxLoss: +(env.PYR_MAX_LOSS || 0), tpPct: +(env.PYR_TP_PCT ?? 5),
 });
 
 // Tus posiciones abiertas de oro (propias, no copiadas).
@@ -359,7 +359,7 @@ async function portfolio(env, days) {
   return {
     account: demo ? 'demo' : 'real', days, statsFrom: env.STATS_FROM || null, updatedAt: new Date().toISOString(), historyError,
     credit: num(cp.credit), unrealizedPnL: num(typeof cp.unrealizedPnL === 'number' ? cp.unrealizedPnL : pick(cp.unrealizedPnL || {}, 'pnL')) ?? sum(open, 'pnl'),
-    invested: sum(open, 'amount'), closedPnL: sum(closed, 'pnl'), open, closed,
+    invested: sum(open, 'amount'), closedPnL: sum(closed, 'pnl'), open, closed, pyramid: pyrOpts(env),
   };
 }
 

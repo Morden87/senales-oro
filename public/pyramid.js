@@ -3,7 +3,7 @@
 //   modo "contra": añades un escalón cada `step` $ que el precio va en tu contra (promediar).
 //   modo "favor":  añades un escalón cada `step` $ que el precio va a tu favor.
 (function (root) {
-  const DEFAULTS = { mode: 'contra', step: 20, maxSteps: 5, maxLoss: 0 };
+  const DEFAULTS = { mode: 'contra', step: 20, maxSteps: 5, maxLoss: 0, tpPct: 5 };
 
   const f2 = (x) => (x == null || !isFinite(x) ? '—' : x.toFixed(2));
   const usd = (x) => (x >= 0 ? '+' : '−') + Math.abs(x).toFixed(2) + ' $';
@@ -35,9 +35,14 @@
       if (o.maxLoss > 0) { const byLoss = avg - dir * o.maxLoss / units; stopLevel = isBuy ? Math.max(stopLevel, byLoss) : Math.min(stopLevel, byLoss); }
     }
     const pnl = isFinite(price) ? dir * units * (price - avg) : null;
+    // TP común: el precio en que la pirámide entera gana tpPct % de lo invertido (sin contar comisiones ni el diferencial).
+    // Poniendo ese mismo TP en todas las posiciones, se cierran a la vez con esa ganancia total.
+    const invested = legs.reduce((a, p) => a + (p.amount || 0), 0);
+    const tpProfit = invested * o.tpPct / 100;
+    const tpLevel = invested > 0 && o.tpPct > 0 ? avg + dir * tpProfit / units : null;
     return {
       isBuy, side: isBuy ? 'COMPRA' : 'VENTA', steps: legs.length, ids: legs.map((p) => String(p.id)).sort(),
-      units, avg, ext, nextLevel, stopLevel, pnl, invested: legs.reduce((a, p) => a + (p.amount || 0), 0),
+      units, avg, ext, nextLevel, stopLevel, pnl, invested, tpLevel, tpProfit, tpPct: o.tpPct,
       lastRate: legs[legs.length - 1].openRate, mode: o.mode, maxSteps: o.maxSteps, maxLoss: o.maxLoss, step: o.step,
     };
   }
@@ -59,7 +64,8 @@
     const against = action === (cur.isBuy ? 'VENDER' : 'COMPRAR');
     const summary = `Precio medio ${f2(cur.avg)} $ · ${cur.steps} ${cur.steps > 1 ? 'escalones' : 'escalón'} · resultado ${cur.pnl == null ? '—' : usd(cur.pnl)}.\n` +
       (cur.steps >= cur.maxSteps ? `Ya tienes el máximo de ${cur.maxSteps} escalones.` : `Próximo escalón a ${f2(cur.nextLevel)} $.`) +
-      ` Stop de la pirámide a ${f2(cur.stopLevel)} $` + (cur.pnl == null ? '.' : ` (resultado allí ≈ ${usd(dir * cur.units * (cur.stopLevel - cur.avg))}).`);
+      ` Stop de la pirámide a ${f2(cur.stopLevel)} $` + (cur.pnl == null ? '.' : ` (resultado allí ≈ ${usd(dir * cur.units * (cur.stopLevel - cur.avg))}).`) +
+      (cur.tpLevel ? `\nTP para +${cur.tpPct} % de lo invertido (${usd(cur.tpProfit)}): ${f2(cur.tpLevel)} $ en todas las posiciones.` : '');
     const sameSet = prev && prev.ids && prev.ids.join() === cur.ids.join() && prev.isBuy === cur.isBuy;
     // Memoria de avisos ya enviados; se reinicia cada vez que cambian los escalones.
     // La tendencia en contra se recuerda aunque cambien los escalones, para no repetir el aviso.
@@ -103,6 +109,12 @@
             message: `El oro ha llegado a ${f2(touch)} $ (nivel ${f2(cur.nextLevel)} $; ahora ${f2(price)} $). Si sigues el plan, añade otro escalón.${warn}\n${summary}` });
         }
         m.next = true;
+      }
+      // 2b) Objetivo de ganancia (TP común) alcanzado.
+      if (cur.tpLevel && dir * (best - cur.tpLevel) >= 0 && !m.tp) {
+        alerts.push({ title: `Cortés: objetivo +${cur.tpPct} % alcanzado`, priority: 4, tags: ['moneybag'],
+          message: `El oro ha llegado a ${f2(best)} $ (TP en ${f2(cur.tpLevel)} $; ahora ${f2(price)} $). Resultado ahora ${usd(cur.pnl)}.\nSi no tenías el TP puesto en eToro, es el momento de cerrar.` });
+        m.tp = true;
       }
       // 3) En "contra": vuelta al precio medio tras haber estado medio escalón por debajo.
       if (cur.mode === 'contra') {
