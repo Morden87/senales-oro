@@ -5,6 +5,7 @@
 import './public/indicators.js'; // define globalThis.GoldTA
 import './public/movement.js'; // define globalThis.GoldMove
 import './public/pyramid.js'; // define globalThis.GoldPyr
+import './public/plan.js'; // define globalThis.GoldPlan
 
 const ETORO = 'https://public-api.etoro.com';
 const GOLD_ID_FALLBACK = 18;
@@ -158,7 +159,12 @@ async function movementAlert(env, c1, c15) {
 }
 
 // Avisa cuando la recomendación (velas de 15 min + tendencia de 1 h) pasa a COMPRAR o VENDER, y cuando vuelve a ESPERAR.
-async function directionAlert(env, c15, pyr = null, signal = null) {
+// Estrategia de los avisos: "senal" (comprar con SL y sin TP, cerrar en VENDER) o "piramide".
+const strategy = (env) => (String(env.ESTRATEGIA || 'senal').toLowerCase().startsWith('pir') ? 'piramide' : 'senal');
+const planOpts = (env) => ({ amount: +(env.SENAL_AMOUNT || 750), leverage: +(env.SENAL_LEVERAGE || 10), slPct: +(env.SENAL_SL_PCT || 5) });
+
+// En modo "senal", hasBuy dice si tienes compras de oro abiertas (null si no se pudo leer la cartera).
+async function directionAlert(env, c15, pyr = null, signal = null, hasBuy = null) {
   const r = signal || globalThis.GoldTA.stableSignal(c15, await getParams(env));
   const prev = (await env.STATE.get('recAction')) || 'ESPERAR';
   // Registro de recomendaciones (cada cambio), para comparar luego con tus operaciones reales.
@@ -170,6 +176,12 @@ async function directionAlert(env, c15, pyr = null, signal = null) {
     await env.STATE.put('recLog', JSON.stringify(next));
   }
   if (r.action === prev) return 'dirección ' + r.action;
+  if (strategy(env) === 'senal') {
+    const a = ntfyTarget(env) ? globalThis.GoldPlan.alertFor(prev, r.action, r.price, r.reason, planOpts(env), hasBuy) : null;
+    if (a) await ntfy(env, a);
+    await env.STATE.put('recAction', r.action); // tras enviar: si ntfy falla, se reintenta en la próxima comprobación
+    return `${prev} -> ${r.action}${a ? ' (aviso enviado)' : ''}`;
+  }
   // Con una pirámide abierta los cambios de COMPRAR/VENDER/ESPERAR no se avisan: de eso se encarga pyramidAlert.
   if (pyr || !ntfyTarget(env)) { await env.STATE.put('recAction', r.action); return `${prev} -> ${r.action}`; }
   const px = fmt(r.price);
@@ -219,6 +231,7 @@ async function pyramidAlert(env, c1, action) {
 
 // Comprobación ligera entre las de 15 min: solo la pirámide, con el último precio y la última recomendación guardada.
 async function pyramidOnly(env) {
+  if (strategy(env) !== 'piramide') return 'modo señal: sin comprobación de pirámide';
   if (!env.ETORO_API_KEY || !env.ETORO_USER_KEY) return 'pirámide: sin claves';
   const c1 = closedOnly(await fetchCandles(env, 8), 'OneMinute');
   if (!c1.length || Date.now() / 1000 - c1[c1.length - 1].time > 20 * 60) return 'mercado cerrado';
@@ -263,8 +276,18 @@ async function checkAndNotify(env) {
   // Si no se puede leer la cartera, se sigue con los avisos normales.
   let sig = null;
   try { sig = globalThis.GoldTA.stableSignal(c15, await getParams(env)); } catch { /* sin recomendación */ }
-  const p = await pyramidAlert(env, c1, sig ? sig.action : 'ESPERAR').catch((e) => ({ cur: null, text: 'pirámide: ERROR ' + e.message }));
-  const d = await directionAlert(env, c15, p.cur, sig).catch((e) => 'dirección: ERROR ' + e.message);
+  let p, hasBuy = null;
+  if (strategy(env) === 'piramide') {
+    p = await pyramidAlert(env, c1, sig ? sig.action : 'ESPERAR').catch((e) => ({ cur: null, text: 'pirámide: ERROR ' + e.message }));
+  } else {
+    // Solo hace falta saber si tienes compras abiertas cuando la recomendación pasa a VENDER.
+    const prevAction = (await env.STATE.get('recAction')) || 'ESPERAR';
+    if (sig && sig.action === 'VENDER' && prevAction !== 'VENDER' && env.ETORO_API_KEY && env.ETORO_USER_KEY) {
+      hasBuy = await goldPositions(env).then((ps) => ps.some((x) => x.isBuy)).catch(() => null);
+    }
+    p = { cur: null, text: 'modo señal' + (hasBuy == null ? '' : hasBuy ? ' (compra abierta)' : ' (sin compras)') };
+  }
+  const d = await directionAlert(env, c15, p.cur, sig, hasBuy).catch((e) => 'dirección: ERROR ' + e.message);
   const b = await paperBreakout(env, c1).catch((e) => 'papel: ERROR ' + e.message);
   return a + ' · ' + p.text + ' · ' + d + ' · ' + b;
 }
@@ -289,6 +312,7 @@ async function status(env) {
     etoroKeys: Boolean(env.ETORO_API_KEY && env.ETORO_USER_KEY),
     cronLast: JSON.parse(cron || 'null'), ntfyLast: JSON.parse(last || 'null'),
     moveLevel: await env.STATE.get('moveLevel'), recAction: await env.STATE.get('recAction'),
+    strategy: strategy(env), plan: planOpts(env),
     pyramid: { ...pyrOpts(env), last: JSON.parse((await env.STATE.get('pyr')) || 'null') },
   };
 }
@@ -359,7 +383,7 @@ async function portfolio(env, days) {
   return {
     account: demo ? 'demo' : 'real', days, statsFrom: env.STATS_FROM || null, updatedAt: new Date().toISOString(), historyError,
     credit: num(cp.credit), unrealizedPnL: num(typeof cp.unrealizedPnL === 'number' ? cp.unrealizedPnL : pick(cp.unrealizedPnL || {}, 'pnL')) ?? sum(open, 'pnl'),
-    invested: sum(open, 'amount'), closedPnL: sum(closed, 'pnl'), open, closed, pyramid: pyrOpts(env),
+    invested: sum(open, 'amount'), closedPnL: sum(closed, 'pnl'), open, closed, pyramid: pyrOpts(env), strategy: strategy(env), plan: planOpts(env),
   };
 }
 

@@ -22,6 +22,13 @@ THRESHOLD = "0.22"
 MIN_MOVE = "5"
 # Las estadísticas de tus operaciones empiezan aquí (creación de Cortés); lo anterior se omite.
 STATS_FROM = "2026-10-28T12:56:00Z"
+# Estrategia de los avisos: "senal" = al pasar a COMPRAR, compra con SL y sin TP; mantenla aunque vuelva a ESPERAR
+# y ciérrala cuando pase a VENDER. "piramide" = los avisos de escalones de abajo.
+ESTRATEGIA = "senal"
+SENAL_AMOUNT = "750"
+SENAL_LEVERAGE = "10"
+# SL en % de lo invertido (con x10, un 5 % son 0,5 % del precio, unos 20 $).
+SENAL_SL_PCT = "5"
 # Pirámide: "contra" = añades un escalón cada PYR_STEP $ en tu contra (promediar); "favor" = a tu favor.
 PYR_MODE = "contra"
 PYR_STEP = "20"

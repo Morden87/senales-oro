@@ -68,9 +68,20 @@ Solo se recomienda COMPRAR o VENDER si el recorrido probable en 15 min (ATR × �
 
 **Si no llegan los avisos**: abre Ajustes (⚙︎) en la app. La sección *Avisos por ntfy* muestra si el servidor tiene el tema configurado, cuándo fue la última comprobación automática y si el último envío funcionó o qué respondió ntfy. El botón *Enviar aviso de prueba* (pide el PIN) manda un aviso al momento y lanza la comprobación. Lo mismo en `GET /api/status` y `POST /api/ntfy-test?run=1` (cabecera `x-admin-pin`). `NTFY_TOPIC` puede ser solo el nombre del tema o la dirección completa (`https://ntfy.sh/tu-tema`). Si ntfy falla, el cambio de estado no se da por avisado y se reintenta en la siguiente comprobación.
 
+### Modo señal (por defecto)
+
+Con `ESTRATEGIA = "senal"` (en `[vars]` de `wrangler.toml`) los avisos siguen la estrategia que mejor salió en la prueba de enero de 2023 a noviembre de 2026 con velas de 1 min: **solo compras, SL fijo y sin TP, y cerrar cuando Cortés pase a VENDER**.
+
+- **COMPRAR**: el aviso trae el plan: `SENAL_AMOUNT` $ (750) a x`SENAL_LEVERAGE` (10), con el SL en el precio en que pierdes `SENAL_SL_PCT` % (5) de lo invertido. Con x10 son un 0,5 % por debajo de la entrada (unos 20 $, −37,50 $ con 750 $). Sin TP.
+- **Vuelta a ESPERAR**: no se avisa. La compra se mantiene.
+- **VENDER**: aviso de cerrar tus compras de oro (lee la cartera para decirte si tienes alguna abierta). No recomienda abrir ventas, porque en la prueba perdían.
+- En *Mis posiciones* de la app aparece, para cada compra de oro, el SL que le toca y si ya tienes SL puesto.
+
+Resultado de la prueba con 750 $ a x10, 0,5 $ de diferencial y una comisión nocturna supuesta: +4262 $ en 503 operaciones, 26 % de aciertos, peor caída −862 $. Ganó todos los años, pero depende de que el oro siga subiendo como en ese periodo (+124 %). No es asesoramiento financiero.
+
 ### Modo pirámide
 
-Si tienes abierta alguna posición propia de oro en eToro (se lee con las mismas claves, solo lectura), el Worker la trata como una pirámide y cambia los avisos. Mientras esté abierta no avisa de cada cambio entre COMPRAR, VENDER y ESPERAR, y solo avisa de esto:
+Con `ESTRATEGIA = "piramide"`: si tienes abierta alguna posición propia de oro en eToro (se lee con las mismas claves, solo lectura), el Worker la trata como una pirámide y cambia los avisos. Mientras esté abierta no avisa de cada cambio entre COMPRAR, VENDER y ESPERAR, y solo avisa de esto:
 
 - **Pirámide abierta, escalón añadido o cerrado, pirámide cerrada**, con precio medio, próximo escalón, stop y TP. Cada posición de oro abierta cuenta como un escalón.
 - **Nivel del siguiente escalón**: el precio se ha alejado `PYR_STEP` $ (20) en tu contra desde el escalón más lejano. Si Cortés está en la dirección contraria, te lo advierte. Si ya tienes `PYR_MAX_STEPS` (5), te avisa de que no añadas más.
@@ -93,4 +104,5 @@ También funciona como web estática (GitHub Pages, Netlify…) con las claves e
 
 - `public/` la app: `index.html`, `app.js` (interfaz), `indicators.js` (indicadores y señales), `data.js` (eToro y Binance), `sw.js`, `manifest.webmanifest`, iconos, `lwc.js` (TradingView Lightweight Charts 4.2.0, Apache-2.0).
 - `public/pyramid.js` lógica de la pirámide (estado, TP y avisos, sin red).
+- `public/plan.js` lógica del modo señal (SL y avisos, sin red).
 - `worker.js`, `wrangler.toml` intermediario, avisos ntfy programados y despliegue en Cloudflare.

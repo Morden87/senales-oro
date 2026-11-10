@@ -131,7 +131,18 @@
     // Pirámide de oro: precio medio y TP común para ganar un 5 % de lo invertido.
     const gold = o.filter((x) => RV.isGold(x) && !x.copied);
     const now = gold.find((x) => x.rate != null);
-    const py = gold.length && window.GoldPyr ? window.GoldPyr.state(gold, now ? now.rate : NaN, p.pyramid || {}) : null;
+    const signalMode = p.strategy !== 'piramide';
+    const py = !signalMode && gold.length && window.GoldPyr ? window.GoldPyr.state(gold, now ? now.rate : NaN, p.pyramid || {}) : null;
+    // Estrategia "señal": cada compra de oro con su SL (un slPct % de lo invertido), sin TP, hasta que Cortés pase a VENDER.
+    const buys = signalMode && window.GoldPlan ? gold.filter((x) => x.isBuy && x.openRate > 0) : [];
+    if (buys.length) {
+      const sl = (p.plan && p.plan.slPct) || window.GoldPlan.DEFAULTS.slPct;
+      html += `<div class="pos" style="border-left:3px solid var(--buy)"><div class="t"><b>Estrategia: comprar con SL ${sl} % y cerrar en VENDER</b></div>` +
+        buys.map((x) => { const s = window.GoldPlan.stopFor(x.openRate, { amount: x.amount || 0, leverage: x.leverage || 1, slPct: sl });
+          const has = x.stopLoss ? ` · tienes SL en ${fmt(x.stopLoss)}` : ' · <b class="dn">sin SL puesto</b>';
+          return `Compra a ${fmt(x.openRate)} · <b>SL en ${fmt(s.level)}</b> (${money(-s.loss)})${has}`; }).join('<br>') +
+        '<br>Sin TP. Mantén la compra aunque Cortés vuelva a ESPERAR y ciérrala cuando pase a VENDER (te llega un aviso).</div>';
+    }
     if (py && py.tpLevel) {
       html += `<div class="pos" style="border-left:3px solid var(--buy)"><div class="t"><b>Pirámide de oro · ${py.side.toLowerCase()} · ${py.steps} ${py.steps > 1 ? 'escalones' : 'escalón'}</b><span class="${cls(py.pnl)}">${money(py.pnl)}</span></div>` +
         `Invertido ${fmt(py.invested)} $ · precio medio ${fmt(py.avg)}` +
