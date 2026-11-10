@@ -183,7 +183,7 @@ async function directionAlert(env, c15, pyr = null, signal = null) {
 // ---------- Pirámide de posiciones (lee tu cartera de eToro, solo lectura) ----------
 const pyrOpts = (env) => ({
   mode: String(env.PYR_MODE || 'contra').toLowerCase() === 'favor' ? 'favor' : 'contra',
-  step: +(env.PYR_STEP || 20), maxSteps: +(env.PYR_MAX_STEPS || 5), maxLoss: +(env.PYR_MAX_LOSS || 0),
+  step: +(env.PYR_STEP || 20), maxSteps: +(env.PYR_MAX_STEPS || 5), maxLoss: +(env.PYR_MAX_LOSS || 0), tpPct: +(env.PYR_TP_PCT ?? 5),
 });
 
 // Tus posiciones abiertas de oro (propias, no copiadas).
@@ -197,16 +197,22 @@ async function goldPositions(env) {
 
 // Detecta la pirámide y avisa de escalones, stop, vuelta a precio medio y tendencia en contra.
 // Devuelve el estado de la pirámide (o null si no hay), para silenciar los avisos normales mientras esté abierta.
-async function pyramidAlert(env, price, action) {
+async function pyramidAlert(env, c1, action) {
+  // Precio actual y mínimo/máximo desde la comprobación anterior (como mucho, las últimas 20 velas de 1 min).
+  const lastT = +((await env.STATE.get('pyrT')) || 0);
+  const recent = c1.slice(-20).filter((k) => k.time >= lastT - 60);
+  const price = c1[c1.length - 1].close;
+  const range = recent.length ? { lo: Math.min(...recent.map((k) => k.low)), hi: Math.max(...recent.map((k) => k.high)) } : null;
   if (!env.ETORO_API_KEY || !env.ETORO_USER_KEY) return { cur: null, text: 'pirámide: sin claves' };
   const o = pyrOpts(env);
   const cur = globalThis.GoldPyr.state(await goldPositions(env), price, o);
   const prev = JSON.parse((await env.STATE.get('pyr')) || 'null');
-  const { alerts, memo } = globalThis.GoldPyr.decide(prev, cur, price, action, o);
+  const { alerts, memo } = globalThis.GoldPyr.decide(prev, cur, price, action, o, range);
   if (alerts.length && ntfyTarget(env)) {
     for (const a of alerts) await ntfy(env, a); // si ntfy falla, no se guarda y se reintenta en la próxima comprobación
   }
   if (memo) await env.STATE.put('pyr', JSON.stringify(memo)); else if (prev) await env.STATE.delete('pyr');
+  await env.STATE.put('pyrT', String(c1[c1.length - 1].time));
   const text = cur ? `pirámide: ${cur.side} ${cur.steps} esc., medio ${fmt(cur.avg)}` : 'pirámide: no';
   return { cur, text: text + (alerts.length ? ` (${alerts.length} aviso${alerts.length > 1 ? 's' : ''})` : '') };
 }
@@ -214,10 +220,10 @@ async function pyramidAlert(env, price, action) {
 // Comprobación ligera entre las de 15 min: solo la pirámide, con el último precio y la última recomendación guardada.
 async function pyramidOnly(env) {
   if (!env.ETORO_API_KEY || !env.ETORO_USER_KEY) return 'pirámide: sin claves';
-  const c1 = closedOnly(await fetchCandles(env, 5), 'OneMinute');
+  const c1 = closedOnly(await fetchCandles(env, 8), 'OneMinute');
   if (!c1.length || Date.now() / 1000 - c1[c1.length - 1].time > 20 * 60) return 'mercado cerrado';
   const action = (await env.STATE.get('recAction')) || 'ESPERAR';
-  return (await pyramidAlert(env, c1[c1.length - 1].close, action)).text;
+  return (await pyramidAlert(env, c1, action)).text;
 }
 
 // Ruptura de 1 h en papel: abre al cierre de la vela de 1 h y cierra 4 h después con el precio de ese momento.
@@ -257,7 +263,7 @@ async function checkAndNotify(env) {
   // Si no se puede leer la cartera, se sigue con los avisos normales.
   let sig = null;
   try { sig = globalThis.GoldTA.stableSignal(c15, await getParams(env)); } catch { /* sin recomendación */ }
-  const p = await pyramidAlert(env, c1[c1.length - 1].close, sig ? sig.action : 'ESPERAR').catch((e) => ({ cur: null, text: 'pirámide: ERROR ' + e.message }));
+  const p = await pyramidAlert(env, c1, sig ? sig.action : 'ESPERAR').catch((e) => ({ cur: null, text: 'pirámide: ERROR ' + e.message }));
   const d = await directionAlert(env, c15, p.cur, sig).catch((e) => 'dirección: ERROR ' + e.message);
   const b = await paperBreakout(env, c1).catch((e) => 'papel: ERROR ' + e.message);
   return a + ' · ' + p.text + ' · ' + d + ' · ' + b;
@@ -353,7 +359,7 @@ async function portfolio(env, days) {
   return {
     account: demo ? 'demo' : 'real', days, statsFrom: env.STATS_FROM || null, updatedAt: new Date().toISOString(), historyError,
     credit: num(cp.credit), unrealizedPnL: num(typeof cp.unrealizedPnL === 'number' ? cp.unrealizedPnL : pick(cp.unrealizedPnL || {}, 'pnL')) ?? sum(open, 'pnl'),
-    invested: sum(open, 'amount'), closedPnL: sum(closed, 'pnl'), open, closed,
+    invested: sum(open, 'amount'), closedPnL: sum(closed, 'pnl'), open, closed, pyramid: pyrOpts(env),
   };
 }
 

@@ -28,3 +28,5 @@ PYR_STEP = "20"
 PYR_MAX_STEPS = "5"
 # Stop: un escalón más allá del último permitido. Opcional: pérdida total en $ de la pirámide que lo adelanta (0 = sin ella).
 PYR_MAX_LOSS = "0"
+# TP común: ganancia objetivo de la pirámide, en % de lo invertido (0 = sin TP).
+PYR_TP_PCT = "5"
