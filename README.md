@@ -62,11 +62,24 @@ npx wrangler deploy
 
 ## Avisos por ntfy
 
-Cada 15 minutos (`*/15 * * * *`, cron de Cloudflare) el Worker descarga velas de 1 y 15 min de GOLD, calcula el movimiento esperado y avisa a ntfy cuando la recomendación pasa a COMPRAR o VENDER (y cuando vuelve a ESPERAR), y cuando el nivel de la **próxima hora** pasa a ALTO (≥60 % de alejarse 10 $) y cuando deja de serlo. Con el mercado cerrado no avisa. Funciona con el móvil apagado. En el móvil instala la app ntfy y suscríbete al mismo tema. En ntfy.sh cualquiera que adivine el nombre del tema puede leerlo, así que elige uno difícil de adivinar.
+Cada 15 minutos (el cron de Cloudflare va cada 5 min, `*/5 * * * *`, y la comprobación completa se hace una de cada tres veces) el Worker descarga velas de 1 y 15 min de GOLD, calcula el movimiento esperado y avisa a ntfy cuando la recomendación pasa a COMPRAR o VENDER (y cuando vuelve a ESPERAR), y cuando el nivel de la **próxima hora** pasa a ALTO (≥60 % de alejarse 10 $) y cuando deja de serlo. Con el mercado cerrado no avisa. Funciona con el móvil apagado. En el móvil instala la app ntfy y suscríbete al mismo tema. En ntfy.sh cualquiera que adivine el nombre del tema puede leerlo, así que elige uno difícil de adivinar.
 
 Solo se recomienda COMPRAR o VENDER si el recorrido probable en 15 min (ATR × √15) es de al menos `MIN_MOVE` dólares (5 por defecto, también ajustable en Ajustes de la app); el objetivo se fija a esa distancia como mínimo.
 
 **Si no llegan los avisos**: abre Ajustes (⚙︎) en la app. La sección *Avisos por ntfy* muestra si el servidor tiene el tema configurado, cuándo fue la última comprobación automática y si el último envío funcionó o qué respondió ntfy. El botón *Enviar aviso de prueba* (pide el PIN) manda un aviso al momento y lanza la comprobación. Lo mismo en `GET /api/status` y `POST /api/ntfy-test?run=1` (cabecera `x-admin-pin`). `NTFY_TOPIC` puede ser solo el nombre del tema o la dirección completa (`https://ntfy.sh/tu-tema`). Si ntfy falla, el cambio de estado no se da por avisado y se reintenta en la siguiente comprobación.
+
+### Modo pirámide
+
+Si tienes abierta alguna posición propia de oro en eToro (se lee con las mismas claves, solo lectura), el Worker la trata como una pirámide y cambia los avisos. Mientras esté abierta no avisa de cada cambio entre COMPRAR, VENDER y ESPERAR, y solo avisa de esto:
+
+- **Pirámide abierta, escalón añadido o cerrado, pirámide cerrada**, con precio medio, próximo escalón, stop y TP. Cada posición de oro abierta cuenta como un escalón.
+- **Nivel del siguiente escalón**: el precio se ha alejado `PYR_STEP` $ (20) en tu contra desde el escalón más lejano. Si Cortés está en la dirección contraria, te lo advierte. Si ya tienes `PYR_MAX_STEPS` (5), te avisa de que no añadas más.
+- **Stop de la pirámide**: un escalón más allá del último permitido (con 5 escalones de 20 $, 100 $ por debajo del primero si compras). Con `PYR_MAX_LOSS` > 0, además, el precio en que toda la pirámide pierde esa cantidad, el que llegue antes.
+- **TP común**: el precio en que toda la pirámide gana `PYR_TP_PCT` % (5) de lo invertido, sin contar comisiones ni el diferencial. Poniendo ese TP en todas las posiciones de oro, se cierran juntas con esa ganancia. Sale también en la tarjeta *Mis posiciones* de la app, y hay aviso cuando el precio llega.
+- **Vuelta a precio medio** después de haber estado al menos medio escalón en pérdidas.
+- **Tendencia en contra confirmada**: la recomendación pasa a la contraria (30 min en 15 min y la tendencia de 1 h).
+
+Los niveles se comparan con el mínimo y el máximo de las velas de 1 min desde la comprobación anterior, para no perder un toque breve. Entre las comprobaciones de 15 min, cada 5 min se revisa solo la pirámide. Al cerrarlo todo vuelven los avisos normales. Ajustes en `[vars]` de `wrangler.toml`: `PYR_MODE` (`contra` para promediar, o `favor` si añades cuando el precio va a tu favor), `PYR_STEP`, `PYR_MAX_STEPS`, `PYR_MAX_LOSS` y `PYR_TP_PCT`. El estado se ve en `GET /api/status` (`pyramid`).
 
 Opcional: `NTFY_SERVER` (en `[vars]`, por defecto https://ntfy.sh), el secreto `NTFY_TOKEN` si tu servidor pide autenticación, `APP_URL` para abrir la app al tocar el aviso y `THRESHOLD` para la exigencia (0.22 por defecto).
 
@@ -79,4 +92,5 @@ También funciona como web estática (GitHub Pages, Netlify…) con las claves e
 ## Archivos
 
 - `public/` la app: `index.html`, `app.js` (interfaz), `indicators.js` (indicadores y señales), `data.js` (eToro y Binance), `sw.js`, `manifest.webmanifest`, iconos, `lwc.js` (TradingView Lightweight Charts 4.2.0, Apache-2.0).
+- `public/pyramid.js` lógica de la pirámide (estado, TP y avisos, sin red).
 - `worker.js`, `wrangler.toml` intermediario, avisos ntfy programados y despliegue en Cloudflare.
