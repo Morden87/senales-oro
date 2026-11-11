@@ -22,9 +22,10 @@ THRESHOLD = "0.22"
 MIN_MOVE = "5"
 # Las estadísticas de tus operaciones empiezan aquí (creación de Cortés); lo anterior se omite.
 STATS_FROM = "2026-10-28T12:56:00Z"
-# Pirámide: "contra" = añades un escalón cada PYR_STEP $ en tu contra (promediar); "favor" = a tu favor.
+# Pirámide: "contra" = añades un escalón cada PYR_STEP en tu contra (promediar); "favor" = a tu favor.
+# PYR_STEP en dólares ("20") o en ATR de 1 h ("1ATR"): con ATR la separación se fija al abrir la pirámide.
 PYR_MODE = "contra"
-PYR_STEP = "20"
+PYR_STEP = "1ATR"
 PYR_MAX_STEPS = "5"
 # Stop: un escalón más allá del último permitido. Opcional: pérdida total en $ de la pirámide que lo adelanta (0 = sin ella).
 PYR_MAX_LOSS = "0"

@@ -173,18 +173,50 @@ async function directionAlert(env, c15, pyr = null, signal = null) {
   // Con una pirámide abierta los cambios de COMPRAR/VENDER/ESPERAR no se avisan: de eso se encarga pyramidAlert.
   if (pyr || !ntfyTarget(env)) { await env.STATE.put('recAction', r.action); return `${prev} -> ${r.action}`; }
   const px = fmt(r.price);
+  // Al entrar: ATR de 1 h de ahora y dónde caerían los escalones si abres la pirámide a este precio.
+  let plan = '';
+  if (r.action !== 'ESPERAR') {
+    try {
+      const o = pyrOpts(env), atr = await atr1h(env), step = o.stepAtr ? atr * o.stepAtr : o.step;
+      const sgn = (r.action === 'COMPRAR' ? 1 : -1) * (o.mode === 'favor' ? 1 : -1);
+      const lv = Array.from({ length: o.maxSteps }, (_, k) => r.price + sgn * step * k);
+      const stop = o.mode === 'favor' ? lv[0] - sgn * step : r.price + sgn * step * o.maxSteps;
+      plan = `\nATR de 1 h hoy: ${fmt(atr)} $ → escalones cada ${fmt(step)} $${o.stepAtr ? ` (${o.stepAtr} ATR)` : ''}: ${lv.map((x, k) => `${k + 1}) ${fmt(x)}`).join(' · ')} · stop ${fmt(stop)} $.`;
+    } catch { /* sin ATR */ }
+  }
   await ntfy(env, r.action === 'ESPERAR'
     ? { title: `Cortés: fin de ${prev} en el oro`, message: `Precio ${px} $. Ahora ESPERAR: ${r.reason}.`, tags: ['pause_button'], priority: 3 }
-    : { title: `Cortés: ${r.action} oro`, message: `Precio ${px} $. ${r.reason}.\nRecomendación informativa, sin ventaja probada en el histórico. No es asesoramiento financiero.`, tags: [r.action === 'COMPRAR' ? 'chart_with_upwards_trend' : 'chart_with_downwards_trend'], priority: 4 });
+    : { title: `Cortés: ${r.action} oro`, message: `Precio ${px} $. ${r.reason}.${plan}\nRecomendación informativa, sin ventaja probada en el histórico. No es asesoramiento financiero.`, tags: [r.action === 'COMPRAR' ? 'chart_with_upwards_trend' : 'chart_with_downwards_trend'], priority: 4 });
   await env.STATE.put('recAction', r.action); // tras enviar: si ntfy falla, se reintenta en la próxima comprobación
   return `${prev} -> ${r.action} (aviso enviado)`;
 }
 
 // ---------- Pirámide de posiciones (lee tu cartera de eToro, solo lectura) ----------
+// PYR_STEP en dólares ("20") o en ATR de 1 h ("1ATR"): con ATR la separación se fija al abrir la pirámide y no cambia hasta cerrarla.
+const stepAtrOf = (env) => { const m = /^\s*([\d.]+)\s*atr\s*$/i.exec(String(env.PYR_STEP || '')); return m ? +m[1] : 0; };
 const pyrOpts = (env) => ({
   mode: String(env.PYR_MODE || 'contra').toLowerCase() === 'favor' ? 'favor' : 'contra',
-  step: +(env.PYR_STEP || 20), maxSteps: +(env.PYR_MAX_STEPS || 5), maxLoss: +(env.PYR_MAX_LOSS || 0), tpPct: +(env.PYR_TP_PCT ?? 5),
+  step: stepAtrOf(env) ? 20 : +(env.PYR_STEP || 20), stepAtr: stepAtrOf(env),
+  maxSteps: +(env.PYR_MAX_STEPS || 5), maxLoss: +(env.PYR_MAX_LOSS || 0), tpPct: +(env.PYR_TP_PCT ?? 5),
 });
+
+// ATR(14) de las velas de 1 h ya cerradas.
+async function atr1h(env) {
+  const h = closedOnly(await fetchCandles(env, 60, 'OneHour'), 'OneHour');
+  const a = globalThis.GoldTA.atr(h.map((k) => k.high), h.map((k) => k.low), h.map((k) => k.close), 14);
+  const v = a[a.length - 1];
+  if (!isFinite(v) || v <= 0) throw new Error('sin ATR de 1 h');
+  return v;
+}
+
+// Opciones con la separación ya resuelta: la guardada al abrir la pirámide o, si no hay, el ATR de 1 h de ahora.
+async function pyrOptsResolved(env, memo) {
+  const o = pyrOpts(env);
+  if (!o.stepAtr) return o;
+  if (memo && memo.step > 0) return { ...o, step: memo.step, atr: memo.atr };
+  const atr = await atr1h(env);
+  return { ...o, step: +(atr * o.stepAtr).toFixed(2), atr };
+}
 
 // Tus posiciones abiertas de oro (propias, no copiadas).
 async function goldPositions(env) {
@@ -204,9 +236,12 @@ async function pyramidAlert(env, c1, action) {
   const price = c1[c1.length - 1].close;
   const range = recent.length ? { lo: Math.min(...recent.map((k) => k.low)), hi: Math.max(...recent.map((k) => k.high)) } : null;
   if (!env.ETORO_API_KEY || !env.ETORO_USER_KEY) return { cur: null, text: 'pirámide: sin claves' };
-  const o = pyrOpts(env);
-  const cur = globalThis.GoldPyr.state(await goldPositions(env), price, o);
+  const positions = await goldPositions(env);
   const prev = JSON.parse((await env.STATE.get('pyr')) || 'null');
+  // La separación guardada solo vale para la misma pirámide (mismo lado); una nueva toma el ATR de ahora.
+  const keep = prev && positions.some((p) => p.isBuy === prev.isBuy);
+  const o = positions.length ? await pyrOptsResolved(env, keep ? prev : null) : pyrOpts(env);
+  const cur = globalThis.GoldPyr.state(positions, price, o);
   const { alerts, memo } = globalThis.GoldPyr.decide(prev, cur, price, action, o, range);
   if (alerts.length && ntfyTarget(env)) {
     for (const a of alerts) await ntfy(env, a); // si ntfy falla, no se guarda y se reintenta en la próxima comprobación
@@ -359,7 +394,8 @@ async function portfolio(env, days) {
   return {
     account: demo ? 'demo' : 'real', days, statsFrom: env.STATS_FROM || null, updatedAt: new Date().toISOString(), historyError,
     credit: num(cp.credit), unrealizedPnL: num(typeof cp.unrealizedPnL === 'number' ? cp.unrealizedPnL : pick(cp.unrealizedPnL || {}, 'pnL')) ?? sum(open, 'pnl'),
-    invested: sum(open, 'amount'), closedPnL: sum(closed, 'pnl'), open, closed, pyramid: pyrOpts(env),
+    invested: sum(open, 'amount'), closedPnL: sum(closed, 'pnl'), open, closed,
+    pyramid: await pyrOptsResolved(env, JSON.parse((await env.STATE.get('pyr')) || 'null')).catch(() => pyrOpts(env)),
   };
 }
 

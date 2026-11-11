@@ -44,6 +44,12 @@
       isBuy, side: isBuy ? 'COMPRA' : 'VENTA', steps: legs.length, ids: legs.map((p) => String(p.id)).sort(),
       units, avg, ext, nextLevel, stopLevel, pnl, invested, tpLevel, tpProfit, tpPct: o.tpPct,
       lastRate: legs[legs.length - 1].openRate, mode: o.mode, maxSteps: o.maxSteps, maxLoss: o.maxLoss, step: o.step,
+      atr: o.atr || null, stepAtr: o.stepAtr || 0,
+      // Precios de todos los escalones del plan, contados desde el primero.
+      plan: (() => {
+        const fav = o.mode === 'favor', base = fav === isBuy ? Math.min(...rates) : Math.max(...rates), sgn = fav ? dir : -dir;
+        return Array.from({ length: o.maxSteps }, (_, k) => base + sgn * o.step * k);
+      })(),
     };
   }
 
@@ -71,8 +77,10 @@
     // La tendencia en contra se recuerda aunque cambien los escalones, para no repetir el aviso.
     let m = sameSet ? { ...prev.flags } : { trend: !!(prev && prev.isBuy === cur.isBuy && prev.flags && prev.flags.trend) };
     if (!prev || !prev.ids || !prev.ids.length || prev.isBuy !== cur.isBuy) {
+      const sep = cur.stepAtr && cur.atr ? `ATR de 1 h ahora: ${f2(cur.atr)} $ → escalones cada ${f2(cur.step)} $ (${cur.stepAtr} ATR), fijos hasta cerrar la pirámide.\n` : `Escalones cada ${f2(cur.step)} $.\n`;
+      const plan = `Plan: ${cur.plan.map((x, k) => `${k + 1}) ${f2(x)}`).join(' · ')} · stop ${f2(cur.stopLevel)} $.\n`;
       alerts.push({ title: `Cortés: pirámide de ${cur.side} abierta`, priority: 3, tags: ['triangular_flag_on_post'],
-        message: `Escalón 1 a ${f2(cur.lastRate)} $. A partir de ahora no te aviso de cada vuelta a ESPERAR: solo de escalones, stop y tendencia en contra.\n${summary}` });
+        message: `Escalón 1 a ${f2(cur.lastRate)} $.\n${sep}${plan}A partir de ahora no te aviso de cada vuelta a ESPERAR: solo de escalones, stop y tendencia en contra.\n${summary}` });
     } else if (!sameSet) {
       const added = cur.ids.filter((id) => !prev.ids.includes(id)).length;
       const removed = prev.ids.filter((id) => !cur.ids.includes(id)).length;
@@ -135,7 +143,7 @@
     // Si el precio se aleja del nivel ya avisado, se puede volver a avisar al regresar.
     if (m.next && isFinite(price) && Math.abs(price - cur.nextLevel) > cur.step / 2) m.next = false;
     if (m.stop && isFinite(price) && dir * (price - cur.stopLevel) > cur.step / 2) m.stop = false;
-    return { alerts, memo: { ids: cur.ids, isBuy: cur.isBuy, side: cur.side, avg: cur.avg, flags: m } };
+    return { alerts, memo: { ids: cur.ids, isBuy: cur.isBuy, side: cur.side, avg: cur.avg, step: cur.step, atr: cur.atr, flags: m } };
   }
 
   root.GoldPyr = { DEFAULTS, state, decide };
