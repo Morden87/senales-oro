@@ -5,6 +5,7 @@
 import './public/indicators.js'; // define globalThis.GoldTA
 import './public/movement.js'; // define globalThis.GoldMove
 import './public/pyramid.js'; // define globalThis.GoldPyr
+import './public/momentum.js'; // define globalThis.GoldMomentum
 
 const ETORO = 'https://public-api.etoro.com';
 const GOLD_ID_FALLBACK = 18;
@@ -286,6 +287,40 @@ async function paperBreakout(env, c1) {
   return opened ? `papel: abre ${opened.side} a ${opened.entry}` : 'papel: sin cambios';
 }
 
+// Semáforo de impulso a 6 h en papel: tras el cierre de cada vela de 1 h calcula el color; cada 15 min cierra
+// las operaciones ficticias que cumplen 6 h. Avisa por ntfy cuando cambia el color.
+async function momentumPaper(env, c1) {
+  const M = globalThis.GoldMomentum;
+  const now = Date.now() / 1000, price = c1.length ? c1[c1.length - 1].close : NaN;
+  const state = JSON.parse((await env.STATE.get('momentum')) || '{"open":[],"closed":[]}');
+  let sig = null;
+  if (new Date().getUTCMinutes() < 15) {
+    sig = M.score(closedOnly(await fetchCandles(env, 300, 'OneHour'), 'OneHour'));
+    if (sig) await env.STATE.put('momLast', JSON.stringify(sig));
+  }
+  const r = M.paperStep(state, sig, price, now);
+  if (r.changed) await env.STATE.put('momentum', JSON.stringify(r.state));
+  let note = r.opened ? `impulso: abre ${r.opened.side} a ${r.opened.entry}` : 'impulso: sin cambios';
+  if (sig) {
+    const prev = (await env.STATE.get('momAction')) || 'NADA';
+    if (sig.action !== prev && ntfyTarget(env)) {
+      const st = M.stats(r.state);
+      const color = { COMPRA: 'VERDE (compra)', VENTA: 'ROJO (venta)', NADA: 'GRIS (sin señal)' }[sig.action];
+      const rec = st.n ? `\nPrueba en papel: ${st.n} cerradas, ${Math.round(st.hit * 100)} % ganadoras, ${st.avg >= 0 ? '+' : ''}${fmt(st.avg)} $ de media.` : '\nPrueba en papel: todavía sin operaciones cerradas.';
+      await ntfy(env, {
+        title: `Cortés · impulso 6 h: ${color}`,
+        message: `Precio ${fmt(sig.price)} $ · puntuación ${sig.score >= 0 ? '+' : ''}${fmt(sig.score)} (umbral ±${M.THRESHOLD}) · ATR 1 h ${fmt(sig.atr)} $.` +
+          (sig.action === 'NADA' ? '\nEl impulso se ha apagado.' : `\nSe espera que siga ${sig.action === 'COMPRA' ? 'subiendo' : 'bajando'} un poco en las próximas 6 h.`) +
+          `${rec}\nSeñal experimental, sin ventaja confirmada. No es asesoramiento financiero.`,
+        tags: [{ COMPRA: 'green_circle', VENTA: 'red_circle', NADA: 'white_circle' }[sig.action]], priority: sig.action === 'NADA' ? 2 : 3,
+      });
+      note += ' (aviso enviado)';
+    }
+    if (sig.action !== prev) await env.STATE.put('momAction', sig.action); // tras enviar: si ntfy falla, se reintenta
+  }
+  return note;
+}
+
 // Cada 15 min: guarda velas, avisa de movimiento y actualiza la prueba en papel.
 async function checkAndNotify(env) {
   const [raw1, raw15] = await Promise.all([fetchCandles(env, 1000), fetchCandles(env, 300, 'FifteenMinutes')]);
@@ -301,7 +336,8 @@ async function checkAndNotify(env) {
   const p = await pyramidAlert(env, c1, sig ? sig.action : 'ESPERAR').catch((e) => ({ cur: null, text: 'pirámide: ERROR ' + e.message }));
   const d = await directionAlert(env, c15, p.cur, sig).catch((e) => 'dirección: ERROR ' + e.message);
   const b = await paperBreakout(env, c1).catch((e) => 'papel: ERROR ' + e.message);
-  return a + ' · ' + p.text + ' · ' + d + ' · ' + b;
+  const m = await momentumPaper(env, c1).catch((e) => 'impulso: ERROR ' + e.message);
+  return a + ' · ' + p.text + ' · ' + d + ' · ' + b + ' · ' + m;
 }
 
 // El cron va cada 5 min: la comprobación completa en la primera de cada cuarto de hora, y en las otras solo la pirámide.
@@ -450,6 +486,12 @@ export default {
         headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
       });
     }
+    if (url.pathname.endsWith('/api/momentum')) {
+      const [st, last] = await Promise.all([env.STATE.get('momentum'), env.STATE.get('momLast')]);
+      return new Response(`{"paper":${st || '{"open":[],"closed":[]}'},"last":${last || 'null'}}`, {
+        headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
+      });
+    }
     if (url.pathname.endsWith('/api/history')) {
       const days = Math.min(HISTORY_DAYS_MAX, Math.max(1, +url.searchParams.get('days') || 14));
       return new Response(`{"days":${days},"candles":${await readHistory(env, days)}}`, {
@@ -479,4 +521,4 @@ export default {
   },
 };
 
-export { checkAndNotify, directionAlert, runCron, ntfyTarget, status, pyramidAlert };
+export { checkAndNotify, directionAlert, runCron, ntfyTarget, status, pyramidAlert, momentumPaper };

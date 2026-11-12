@@ -14,7 +14,7 @@
   const pick = (o) => Object.fromEntries(PARAM_KEYS.filter((k) => o && o[k] !== undefined).map((k) => [k, o[k]]));
   let params = { ...pick(TA.DEFAULTS), ...pick(cfg.params) };
   let timer = null, busy = false, lastLevel = null;
-  let slow = { at: 0, c15: null, history: [], paper: null, pf: null, rv: null, rvAt: 0 }; // datos que cambian despacio
+  let slow = { at: 0, c15: null, history: [], paper: null, mom: null, pf: null, rv: null, rvAt: 0 }; // datos que cambian despacio
   const save = () => { const { proxy, ...persist } = cfg; persist.params = params; store.set(persist); };
   const paramsText = (p) => `${TA.MODES[p.mode] || p.mode} · exigencia ${(+p.threshold).toFixed(2)} · coincidencia ${Math.round(p.agree * 100)}%${p.htf ? ' · con tendencia 15 min' : ''}`;
 
@@ -86,6 +86,29 @@
         <div class="bar"><i style="left:${left}%;width:${Math.max(w, 2)}%;background:${col}"></i></div><div class="tag ${cls}">${tag}</div></div>`;
     }).join('');
     return I;
+  }
+
+  function renderMomentum() {
+    const el = $('mom'), m = slow.mom;
+    if (!el) return;
+    if (!cfg.proxy) { el.textContent = 'Solo disponible con tu servidor de Cloudflare.'; return; }
+    if (!m) { el.textContent = 'Sin datos todavía.'; return; }
+    const L = m.last, P = m.paper || { open: [], closed: [] }, st = window.GoldMomentum.stats(P);
+    const col = { COMPRA: ['var(--buy)', 'VERDE · compra'], VENTA: ['var(--sell)', 'ROJO · venta'], NADA: ['var(--muted)', 'GRIS · sin señal'] };
+    const names = { cci: 'CCI', bollinger: 'Bollinger', keltner: 'Keltner', apertura: 'Apertura del día', pendiente: 'Pendiente media 20 h', impulso6h: 'Subida 6 h' };
+    let html = '';
+    if (L) {
+      const [c, t] = col[L.action];
+      html += `<p><b style="color:${c}">● ${t}</b> · puntuación <b>${L.score >= 0 ? '+' : ''}${fmt(L.score)}</b> · vela cerrada a las ${hhmm(L.time + 3600)} · ATR 1 h ${fmt(L.atr)} $</p>` +
+        '<p>' + Object.entries(L.parts).map(([k, v]) => `${names[k]} <span class="${v >= 0 ? 'up' : 'dn'}">${v >= 0 ? '+' : ''}${fmt(v)}</span>`).join(' · ') + '</p>';
+    } else html += '<p>Se calcula tras el cierre de la próxima vela de 1 h.</p>';
+    html += st.n
+      ? `<p><b>${st.n}</b> cerradas · ${st.wins} ganadoras (${Math.round(st.hit * 100)} %) · resultado total <b class="${st.total >= 0 ? 'up' : 'dn'}">${st.total >= 0 ? '+' : ''}${fmt(st.total)} $</b> por onza (${fmt(st.avg)} $ de media). Hacen falta unas 200 para sacar conclusiones.</p>`
+      : '<p>Todavía no hay operaciones cerradas. Suele haber unas 4 señales al día.</p>';
+    if (P.open.length) html += `<p>Abiertas: ${P.open.length} (la más reciente, ${P.open[P.open.length - 1].side} a ${fmt(P.open[P.open.length - 1].entry)} $).</p>`;
+    if (P.closed.length) html += '<table class="pp"><tr><th>Entrada</th><th>Lado</th><th>Precio</th><th>Salida</th><th>Resultado</th></tr>' +
+      P.closed.slice(-8).reverse().map((t) => `<tr><td>${new Date((t.time + 3600) * 1000).toLocaleString('es-ES', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</td><td>${t.side}</td><td>${fmt(t.entry)}</td><td>${fmt(t.exit)}</td><td class="${t.pnl >= 0 ? 'up' : 'dn'}">${t.pnl >= 0 ? '+' : ''}${fmt(t.pnl)}</td></tr>`).join('') + '</table>';
+    el.innerHTML = html;
   }
 
   function renderPaper() {
@@ -207,7 +230,7 @@
     $('src').textContent = label;
     const I = renderDirection(candles);
     renderMovement(candles, live);
-    renderPaper();
+    renderPaper(); renderMomentum();
     $('updated').textContent = 'Última vela ' + hhmm(candles[candles.length - 1].time) + ' · actualizado ' + new Date().toLocaleTimeString('es-ES');
     candleS.setData(candles.map(({ time, open, high, low, close }) => ({ time, open, high, low, close })));
     e21.setData(line(candles, I.ema21));
@@ -242,8 +265,8 @@
     slow.at = Date.now();
     try { slow.c15 = (await Data.load(cfg, 15)).candles.filter((k) => k.time + 900 <= Date.now() / 1000); } catch { slow.c15 = null; }
     if (cfg.proxy) {
-      const [h, p] = await Promise.all([getJSON('api/history?days=4'), getJSON('api/paper')]);
-      slow.history = (h && h.candles) || []; slow.paper = p;
+      const [h, p, m] = await Promise.all([getJSON('api/history?days=4'), getJSON('api/paper'), getJSON('api/momentum')]);
+      slow.history = (h && h.candles) || []; slow.paper = p; slow.mom = m;
       refreshAccount(); // en segundo plano: si eToro tarda, el resto de la app no espera
     }
   }
@@ -315,7 +338,7 @@
       try { await pushServerParams(next); } catch (e) { showError(e.message); }
     }
     if (cfg.notify && 'Notification' in window && Notification.permission === 'default') await Notification.requestPermission();
-    if (sourceChanged) { slow = { at: 0, c15: null, history: [], paper: null, pf: null, rv: null, rvAt: 0 }; fitted = false; }
+    if (sourceChanged) { slow = { at: 0, c15: null, history: [], paper: null, mom: null, pf: null, rv: null, rvAt: 0 }; fitted = false; }
     slow.at = 0;
     lastLevel = null; refresh();
   });

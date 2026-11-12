@@ -68,6 +68,12 @@ Solo se recomienda COMPRAR o VENDER si el recorrido probable en 15 min (ATR × �
 
 **Si no llegan los avisos**: abre Ajustes (⚙︎) en la app. La sección *Avisos por ntfy* muestra si el servidor tiene el tema configurado, cuándo fue la última comprobación automática y si el último envío funcionó o qué respondió ntfy. El botón *Enviar aviso de prueba* (pide el PIN) manda un aviso al momento y lanza la comprobación. Lo mismo en `GET /api/status` y `POST /api/ntfy-test?run=1` (cabecera `x-admin-pin`). `NTFY_TOPIC` puede ser solo el nombre del tema o la dirección completa (`https://ntfy.sh/tu-tema`). Si ntfy falla, el cambio de estado no se da por avisado y se reintenta en la siguiente comprobación.
 
+### Semáforo de impulso a 6 h (en papel)
+
+Tras el cierre de cada vela de 1 h, el Worker calcula la media de seis medidores, cada uno entre −1 y +1: CCI(20), Bollinger(20), Keltner (EMA 20 ± 2 ATR), precio frente a la apertura del día (UTC), pendiente de la EMA 20 y subida de las últimas 6 h. Verde (COMPRA) si supera +0,6, rojo (VENTA) si baja de −0,6, gris si no. Cada señal se anota como operación ficticia y se cierra 6 h después con 0,5 $ de spread. Avisa por ntfy cuando cambia el color, y la tarjeta de la app muestra el color, los medidores y el resultado acumulado. `GET /api/momentum` devuelve el estado. Lógica en `public/momentum.js`.
+
+En el histórico de Dukascopy (velas de 1 h, 2022 a sep 2026) dio unas 4 señales al día, con un resultado por señal de −0,46 $ (2022), −0,89 $ (2023), +0,79 $ (2024), +0,71 $ (2025) y +3,88 $ (2026). De 1.831 reglas probadas a 6 h, el impulso a corto plazo fue lo único que se repitió en los dos periodos, pero no es estable: por eso solo se sigue en papel.
+
 ### Modo pirámide
 
 Si tienes abierta alguna posición propia de oro en eToro (se lee con las mismas claves, solo lectura), el Worker la trata como una pirámide y cambia los avisos. Mientras esté abierta no avisa de cada cambio entre COMPRAR, VENDER y ESPERAR, y solo avisa de esto:
@@ -93,4 +99,5 @@ También funciona como web estática (GitHub Pages, Netlify…) con las claves e
 
 - `public/` la app: `index.html`, `app.js` (interfaz), `indicators.js` (indicadores y señales), `data.js` (eToro y Binance), `sw.js`, `manifest.webmanifest`, iconos, `lwc.js` (TradingView Lightweight Charts 4.2.0, Apache-2.0).
 - `public/pyramid.js` lógica de la pirámide (estado, TP y avisos, sin red).
+- `public/momentum.js` semáforo de impulso a 6 h y su prueba en papel (sin red).
 - `worker.js`, `wrangler.toml` intermediario, avisos ntfy programados y despliegue en Cloudflare.

@@ -118,6 +118,12 @@
 
   <section class="card"><div id="chart"></div><div class="sub">Líneas discontinuas: alejamiento típico en la próxima hora.</div></section>
 
+  <section class="card" id="momCard">
+    <h2>Semáforo de impulso a 6 h (en papel)</h2>
+    <p class="sub" style="margin:0 0 8px">Media de seis medidores sobre velas de 1 h (CCI, Bollinger, Keltner, precio frente a la apertura del día, pendiente de la media de 20 h y subida de las últimas 6 h). Verde si supera +0,6, rojo si baja de −0,6. Cada señal se anota como operación ficticia y se cierra 6 h después, con 0,5 $ de spread. En 2022-2026 ganó en 2024-2026 y perdió en 2022-2023: está en prueba, no es una recomendación.</p>
+    <div id="mom" class="sub">Cargando…</div>
+  </section>
+
   <section class="card">
     <h2>Ruptura de 1 h en papel</h2>
     <p class="sub" style="margin:0 0 8px">Cuando una vela de 1 h cierra por encima del máximo (o por debajo del mínimo) de las 20 anteriores, a favor de la tendencia diaria, el servidor anota una operación ficticia y la cierra 4 h después, descontando 0,5 $ de spread. Es la única pista que dio el análisis y está sin confirmar: no es una recomendación.</p>
@@ -203,6 +209,7 @@
 <script src="movement.js"></script>
 <script src="review.js"></script>
 <script src="pyramid.js"></script>
+<script src="momentum.js"></script>
 <script src="data.js"></script>
 <script src="app.js"></script>
 </body>
