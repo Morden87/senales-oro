@@ -88,42 +88,70 @@
   table.pp td:first-child, table.pp th:first-child { text-align: left; }
   table.pp td:not(:first-child), table.pp th:not(:first-child) { white-space: nowrap; }
   #rv table.pp { font-size: 12px; } #rv table.pp td, #rv table.pp th { padding: 5px 3px; }
+  .num { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--gold); color: #1a1405; font-size: 12px; margin-right: 6px; }
+  .step.off { opacity: .55; }
+  .lvl { display: flex; align-items: center; gap: 12px; }
+  .chip.big { font-size: 15px; padding: 6px 12px; margin: 0; }
+  .prob { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .pbar { position: relative; } .pbar u { position: absolute; top: 0; width: 2px; height: 6px; background: var(--text); }
+  .state { font-size: 22px; font-weight: 800; margin: 2px 0 4px; }
+  .final { text-align: center; } .final .act { font-size: 40px; font-weight: 800; letter-spacing: 1px; }
+  .act.COMPRA { color: var(--buy); } .act.VENTA { color: var(--sell); }
+  .center { text-align: center; }
   footer { text-align: center; color: var(--muted); font-size: 12px; margin-top: 8px; }
 </style>
 </head>
 <body>
 <main>
   <header>
-    <div><h1><span>Cortés</span> · movimiento del oro</h1><div class="src" id="src">Cargando…</div></div>
+    <div><h1><span>Cortés</span> · oro en dos pasos</h1><div class="src" id="src">Cargando…</div></div>
     <div style="display:flex;gap:6px"><button id="refresh" aria-label="Actualizar">↻</button><button id="openSettings" aria-label="Ajustes">⚙︎</button></div>
   </header>
 
   <div class="card err" id="err"></div>
 
-  <section class="card rec">
-    <h2>Recomendación</h2>
-    <div class="dir"><span class="act ESPERAR" id="act">—</span><span class="sub" id="reason"></span></div>
-    <p class="sub" style="margin:6px 0 4px">Se calcula con velas de 15 min: pide que la señal se mantenga 30 min, que la tendencia de 1 h vaya a favor y que el precio no esté ya demasiado estirado (más de 3 ATR de su media). En 2 años de datos ninguna combinación de estos medidores predijo la dirección a 15 min, 1 h o 4 h mejor que el azar. Tómala como contexto, no como predicción.</p>
-    <div class="sub" id="paramsLine">&nbsp;</div>
-    <div id="meters"></div>
-  </section>
-
   <section class="card">
-    <h2>Movimiento esperado</h2>
     <div class="price" id="price">—</div>
-    <div class="sub" id="moveNote">&nbsp;</div>
-    <div class="mv" id="mv"></div>
-    <div class="sub" id="updated" style="margin-top:10px">&nbsp;</div>
+    <div class="sub" id="updated">&nbsp;</div>
   </section>
 
-  <section class="card"><div id="chart"></div><div class="sub">Líneas discontinuas: alejamiento típico en la próxima hora.</div></section>
+  <section class="card step" id="s1">
+    <h2><span class="num">1</span> ¿Viene movimiento?</h2>
+    <div class="lvl"><span class="chip big" id="lvl">—</span><span class="prob" id="prob"></span></div>
+    <div class="pbar"><i id="probBar"></i><u id="probThr"></u></div>
+    <div class="sub" id="why">&nbsp;</div>
+    <div class="sub" id="news">&nbsp;</div>
+  </section>
+
+  <section class="card step" id="s2">
+    <h2><span class="num">2</span> ¿Ha empezado?</h2>
+    <div class="state" id="start">—</div>
+    <div class="levels">
+      <div>Rompe al alza<b id="hh">—</b>cierre de 1 h por encima</div>
+      <div>Rompe a la baja<b id="ll">—</b>cierre de 1 h por debajo</div>
+      <div>O vela de más de<b id="big">—</b>1,2 ATR de 1 h</div>
+    </div>
+  </section>
+
+  <section class="card step" id="s3">
+    <h2><span class="num">3</span> ¿Hacia dónde?</h2>
+    <div class="sub" id="trend">—</div>
+    <div class="final"><span class="act ESPERAR" id="act">ESPERAR</span></div>
+    <div class="sub center" id="actWhy">&nbsp;</div>
+    <div class="levels" id="trade" style="display:none">
+      <div>Entrada<b id="tEntry">—</b>&nbsp;</div>
+      <div>Cerrar<b id="tExit">—</b>a las 6 h</div>
+      <div>Stop orientativo<b id="tStop">—</b>2 ATR</div>
+    </div>
+  </section>
+
+  <section class="card"><div id="chart"></div><div class="sub">Velas de 1 h. Líneas: niveles de ruptura (máximo y mínimo de 20 h) y, si hay señal, el stop.</div></section>
 
   <section class="card">
-    <h2>Ruptura de 1 h en papel</h2>
-    <p class="sub" style="margin:0 0 8px">Cuando una vela de 1 h cierra por encima del máximo (o por debajo del mínimo) de las 20 anteriores, a favor de la tendencia diaria, el servidor anota una operación ficticia y la cierra 4 h después, descontando 0,5 $ de spread. Es la única pista que dio el análisis y está sin confirmar: no es una recomendación.</p>
+    <h2>Seguimiento en papel</h2>
+    <p class="sub" style="margin:0 0 8px">Cada señal se anota sola: entra en la apertura de la vela siguiente y se cierra 6 h después, con 0,5 $ de diferencial. Al lado, lo que habría dado la misma ruptura sin el paso 1. Regla: tras unas 60 señales (unos 3 meses), si la media no supera +0,1 ATR por operación, el sistema se retira.</p>
     <div id="paper" class="sub">Cargando…</div>
   </section>
-
 
   <section class="card" id="pfCard">
     <h2>Mis posiciones en eToro</h2>
@@ -132,14 +160,14 @@
 
   <section class="card" id="rvCard">
     <h2>Tus operaciones de oro frente a Cortés</h2>
-    <p class="sub" style="margin:0 0 8px">Compara cada operación de oro que abriste o cerraste con la recomendación que daba la app en ese momento, y propone mejoras. Usa el registro del servidor y, para fechas anteriores, la recalcula con las velas guardadas (hasta 30 días) y los ajustes actuales.</p>
+    <p class="sub" style="margin:0 0 8px">Compara cada operación de oro que abriste o cerraste con la señal que daba Cortés en ese momento (COMPRA, VENTA o ESPERAR), y propone mejoras. Usa el registro del servidor: desde esta versión, el sistema en dos pasos; antes, la recomendación antigua de 15 min.</p>
     <div id="rv" class="sub">Cargando…</div>
   </section>
 
   <section class="card warn">
-    <b>Aviso.</b> Esto no es asesoramiento financiero. Cortés estima cuánto puede moverse el oro, no hacia dónde. La app nunca opera por ti. Arriesga solo lo que puedas permitirte perder.
+    <b>Aviso.</b> Esto no es asesoramiento financiero. El paso 1 (cuándo) funciona bien en el histórico; la dirección tiene una ventaja pequeña y sin demostrar (ganó en 2023-25 y perdió en 2022 y 2026). Por eso se sigue en papel. La app nunca opera por ti.
   </section>
-  <footer>Datos cada 30 s · <span id="ver">v4</span></footer>
+  <footer>Datos cada 30 s · se calcula con velas de 1 h cerradas · <span id="ver">v5</span></footer>
 </main>
 
 <dialog id="settings">
@@ -160,47 +188,24 @@
         <p class="sub">Crea una clave de <b>solo lectura</b> en eToro: Ajustes → Trading → API Key Management. Se guarda solo en este móvil.</p>
       </div>
     </div>
-    <label>Movimiento de referencia ($)</label>
-    <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px">
-      <div><label for="ref_m15" style="margin-top:0">15 min</label><input id="ref_m15" type="number" inputmode="decimal" min="1" step="1"></div>
-      <div><label for="ref_h1" style="margin-top:0">1 hora</label><input id="ref_h1" type="number" inputmode="decimal" min="1" step="1"></div>
-      <div><label for="ref_h4" style="margin-top:0">4 horas</label><input id="ref_h4" type="number" inputmode="decimal" min="1" step="1"></div>
-    </div>
-    <p class="sub">La app calcula la probabilidad de que el precio se aleje al menos esa cantidad del precio actual. Los avisos de ntfy usan 10 $ en 1 hora.</p>
-    <h2 style="margin-top:16px">Dirección (informativa)</h2>
-    <label for="mode">Estrategia</label>
-    <select id="mode">
-      <option value="mixto">Mixto (todos los medidores votan)</option>
-      <option value="tendencia">Tendencia (EMA, MACD, impulso)</option>
-      <option value="rebote">Rebote (RSI, Bollinger, Estocástico)</option>
-    </select>
-    <label for="threshold">Exigencia</label>
-    <select id="threshold">
-      <option value="0.15">0,15</option><option value="0.2">0,20</option><option value="0.22">0,22</option>
-      <option value="0.25">0,25</option><option value="0.3">0,30</option><option value="0.4">0,40</option>
-    </select>
-    <label for="agree">Coincidencia mínima entre medidores</label>
-    <select id="agree"><option value="0.5">50%</option><option value="0.6">60%</option><option value="0.75">75%</option></select>
-    <label class="chk"><input type="checkbox" id="htf"> Solo a favor de la tendencia de 15 min</label>
-    <input id="minMove" type="hidden">
     <div id="pinBox">
-      <label for="pin">PIN para cambiar ajustes de dirección</label>
+      <label for="pin">PIN</label>
       <input id="pin" type="password" inputmode="numeric" autocomplete="off">
-      <p class="sub">Es el secreto ADMIN_PIN de Cloudflare. También sirve para ver tus posiciones de eToro.</p>
+      <p class="sub">Es el secreto ADMIN_PIN de Cloudflare. Sirve para ver tus posiciones de eToro y para enviar el aviso de prueba.</p>
     </div>
     <div id="ntfyBox">
       <h2 style="margin-top:16px">Avisos por ntfy</h2>
       <p class="sub" id="ntfyState">Comprobando…</p>
       <div class="actions" style="justify-content:flex-start"><button type="button" id="ntfyTest">Enviar aviso de prueba</button></div>
     </div>
-    <label class="chk"><input type="checkbox" id="notify"> Avisarme en el móvil cuando el movimiento esperado pase a ALTO (con la app abierta)</label>
+    <label class="chk"><input type="checkbox" id="notify"> Avisarme en este móvil con la app abierta (movimiento probable y señales)</label>
     <div class="actions"><button value="cancel">Cancelar</button><button value="ok" class="primary" id="save">Guardar</button></div>
   </form>
 </dialog>
 
 <script src="lwc.js"></script>
 <script src="indicators.js"></script>
-<script src="movement.js"></script>
+<script src="sistema.js"></script>
 <script src="review.js"></script>
 <script src="pyramid.js"></script>
 <script src="data.js"></script>

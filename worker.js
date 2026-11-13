@@ -1,9 +1,8 @@
 // Cloudflare Worker: sirve la app (carpeta public/), reenvía /etoro/* a la API de eToro
 // añadiendo las claves (secretos del Worker, nunca llegan al navegador), guarda el histórico
-// de velas de 1 min, muestra tus posiciones de eToro (solo lectura, con PIN) y, cada 15 minutos, calcula cuánto se espera que se mueva el oro, avisa por ntfy
-// cuando se espera mucho movimiento y sigue en papel la ruptura de 1 h a favor de la tendencia diaria.
-import './public/indicators.js'; // define globalThis.GoldTA
-import './public/movement.js'; // define globalThis.GoldMove
+// de velas de 1 min, muestra tus posiciones de eToro (solo lectura, con PIN) y, al cierre de cada vela de 1 h, calcula el
+// sistema en dos pasos (¿viene movimiento? → ¿ha empezado? → ¿hacia dónde?), lo sigue en papel y avisa por ntfy.
+import './public/sistema.js'; // define globalThis.GoldSys
 import './public/pyramid.js'; // define globalThis.GoldPyr
 
 const ETORO = 'https://public-api.etoro.com';
@@ -79,27 +78,6 @@ async function readHistory(env, days) {
   return '[' + parts.filter((p) => p && p.length > 2).map((p) => p.slice(1, -1)).join(',') + ']';
 }
 
-async function getParams(env) {
-  const stored = JSON.parse((await env.STATE.get('params')) || 'null');
-  return {
-    ...globalThis.GoldTA.DEFAULTS,
-    threshold: +(env.THRESHOLD || 0.22), minMove: +(env.MIN_MOVE || 5),
-    ...(stored || {}), horizon: 15,
-  };
-}
-
-function cleanParams(p) {
-  const out = {};
-  if (Object.keys(globalThis.GoldTA.MODES).includes(p.mode)) out.mode = p.mode;
-  for (const [k, lo, hi] of [['threshold', 0.05, 0.9], ['agree', 0.3, 1], ['minMove', 0, 100]]) {
-    const v = +p[k]; if (isFinite(v)) out[k] = Math.min(hi, Math.max(lo, v));
-  }
-  if (typeof p.htf === 'boolean') out.htf = p.htf;
-  if (p.note) out.note = String(p.note).slice(0, 300);
-  out.updatedAt = new Date().toISOString();
-  return out;
-}
-
 const fmt = (x, d = 2) => (x == null || !isFinite(x) ? '—' : x.toFixed(d));
 const pct = (x) => Math.round(x * 100) + '%';
 
@@ -131,53 +109,6 @@ async function ntfy(env, { title, message, tags, priority }) {
   // Último envío, para verlo en GET /api/status.
   await env.STATE.put('ntfyLast', JSON.stringify({ t: new Date().toISOString(), title, ok: !error, error })).catch(() => {});
   if (error) throw new Error(error);
-}
-
-const refs = (env) => ({ m15: +(env.REF_15M || 5), h1: +(env.REF_1H || 10), h4: +(env.REF_4H || 20) });
-
-// Avisa al pasar a movimiento ALTO en la próxima hora, y otra vez cuando se calma.
-async function movementAlert(env, c1, c15) {
-  const f = globalThis.GoldMove.forecast({ 1: c1, 15: c15 }, refs(env));
-  const h1 = f.find((x) => x.id === 'h1'); if (!h1) return 'sin previsión';
-  const prev = (await env.STATE.get('moveLevel')) || 'BAJO';
-  const now = h1.level;
-  // Sin cambio entre ALTO y no ALTO no hay aviso; si lo hay, el nivel se guarda tras enviarlo, así un fallo de ntfy se reintenta.
-  if ((now === 'ALTO') === (prev === 'ALTO') || !ntfyTarget(env)) {
-    if (now !== prev) await env.STATE.put('moveLevel', now);
-    return `${prev} -> ${now}`;
-  }
-  const lines = f.map((x) => `${x.label}: rango ~${fmt(x.range, 0)} $ · ${pct(x.prob)} de alejarse ≥${x.ref} $`).join('\n');
-  // La dirección la da la recomendación de la app (velas de 15 min y tendencia de 1 h), solo como contexto.
-  let rec = '';
-  try { const r = globalThis.GoldTA.stableSignal(c15, await getParams(env)); rec = `\nRecomendación ahora: ${r.action} (${r.reason}).`; } catch { /* sin recomendación */ }
-  await ntfy(env, now === 'ALTO'
-    ? { title: 'Cortés: se espera mucho movimiento en el oro', message: `Precio ${fmt(h1.price)} $.\n${lines}\nEste aviso indica tamaño, no dirección: puede ser hacia arriba o hacia abajo.${rec}`, tags: ['zap'], priority: 4 }
-    : { title: 'Cortés: el oro se calma', message: `Precio ${fmt(h1.price)} $.\n${lines}`, tags: ['zzz'], priority: 2 });
-  await env.STATE.put('moveLevel', now);
-  return `${prev} -> ${now} (aviso enviado)`;
-}
-
-// Avisa cuando la recomendación (velas de 15 min + tendencia de 1 h) pasa a COMPRAR o VENDER, y cuando vuelve a ESPERAR.
-async function directionAlert(env, c15, pyr = null, signal = null) {
-  const r = signal || globalThis.GoldTA.stableSignal(c15, await getParams(env));
-  const prev = (await env.STATE.get('recAction')) || 'ESPERAR';
-  // Registro de recomendaciones (cada cambio), para comparar luego con tus operaciones reales.
-  const log = JSON.parse((await env.STATE.get('recLog')) || 'null');
-  if (!log || r.action !== prev) {
-    const next = log || { start: Math.floor(Date.now() / 1000), items: [] };
-    next.items.push({ t: Math.floor(Date.now() / 1000), a: r.action, p: r.price, s: r.stage || null });
-    next.items = next.items.slice(-3000);
-    await env.STATE.put('recLog', JSON.stringify(next));
-  }
-  if (r.action === prev) return 'dirección ' + r.action;
-  // Con una pirámide abierta los cambios de COMPRAR/VENDER/ESPERAR no se avisan: de eso se encarga pyramidAlert.
-  if (pyr || !ntfyTarget(env)) { await env.STATE.put('recAction', r.action); return `${prev} -> ${r.action}`; }
-  const px = fmt(r.price);
-  await ntfy(env, r.action === 'ESPERAR'
-    ? { title: `Cortés: fin de ${prev} en el oro`, message: `Precio ${px} $. Ahora ESPERAR: ${r.reason}.`, tags: ['pause_button'], priority: 3 }
-    : { title: `Cortés: ${r.action} oro`, message: `Precio ${px} $. ${r.reason}.\nRecomendación informativa, sin ventaja probada en el histórico. No es asesoramiento financiero.`, tags: [r.action === 'COMPRAR' ? 'chart_with_upwards_trend' : 'chart_with_downwards_trend'], priority: 4 });
-  await env.STATE.put('recAction', r.action); // tras enviar: si ntfy falla, se reintenta en la próxima comprobación
-  return `${prev} -> ${r.action} (aviso enviado)`;
 }
 
 // ---------- Pirámide de posiciones (lee tu cartera de eToro, solo lectura) ----------
@@ -222,58 +153,109 @@ async function pyramidOnly(env) {
   if (!env.ETORO_API_KEY || !env.ETORO_USER_KEY) return 'pirámide: sin claves';
   const c1 = closedOnly(await fetchCandles(env, 8), 'OneMinute');
   if (!c1.length || Date.now() / 1000 - c1[c1.length - 1].time > 20 * 60) return 'mercado cerrado';
-  const action = (await env.STATE.get('recAction')) || 'ESPERAR';
+  const action = actionOf(JSON.parse((await env.STATE.get('sysPaper')) || 'null'));
   return (await pyramidAlert(env, c1, action)).text;
 }
 
-// Ruptura de 1 h en papel: abre al cierre de la vela de 1 h y cierra 4 h después con el precio de ese momento.
-const SPREAD = 0.5;
-async function paperBreakout(env, c1) {
-  const paper = JSON.parse((await env.STATE.get('paper')) || '{"open":[],"closed":[]}');
-  const now = Date.now() / 1000, price = c1.length ? c1[c1.length - 1].close : NaN;
-  let changed = false;
-  for (const t of paper.open.filter((x) => now >= x.time + 3600 + 4 * 3600 && isFinite(price))) {
-    const dir = t.side === 'LARGO' ? 1 : -1;
-    paper.closed.push({ ...t, exitTime: Math.floor(now), exit: price, pnl: +(dir * (price - t.entry) - SPREAD).toFixed(2) });
-    paper.open = paper.open.filter((x) => x !== t); changed = true;
+// ---------- Sistema en dos pasos (velas de 1 h) ----------
+const extraFed = (env) => String(env.FED_DATES || '').split(/[\s,;]+/).filter((x) => /^\d{4}-\d{2}-\d{2}$/.test(x));
+const madrid = (t, o = { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) =>
+  new Date(t * 1000).toLocaleString('es-ES', { timeZone: 'Europe/Madrid', ...o });
+const hm = (t) => madrid(t, { hour: '2-digit', minute: '2-digit' });
+const actionOf = (paper) => (paper && paper.open && paper.open.length ? (paper.open[0].side === 'COMPRA' ? 'COMPRAR' : 'VENDER') : 'ESPERAR');
+
+// Registro de cambios de la señal (para comparar luego con tus operaciones reales).
+async function logAction(env, action, price) {
+  const prev = (await env.STATE.get('recAction')) || 'ESPERAR';
+  const log = JSON.parse((await env.STATE.get('recLog')) || 'null');
+  if (!log || action !== prev) {
+    const next = log || { start: Math.floor(Date.now() / 1000), items: [] };
+    next.items.push({ t: Math.floor(Date.now() / 1000), a: action, p: price, s: 'dos pasos' });
+    next.items = next.items.slice(-3000);
+    await env.STATE.put('recLog', JSON.stringify(next));
   }
-  let opened = null;
-  if (new Date().getUTCMinutes() < 15 && !paper.open.length) { // primera ejecución tras el cierre de cada hora
-    const [h, d] = await Promise.all([fetchCandles(env, 30, 'OneHour'), fetchCandles(env, 40, 'OneDay')]);
-    const sig = globalThis.GoldMove.breakout1h(closedOnly(h, 'OneHour'), closedOnly(d, 'OneDay'));
-    if (sig && !paper.closed.some((x) => x.time === sig.time)) {
-      opened = { side: sig.side, time: sig.time, entry: sig.price, level: sig.level };
-      paper.open.push(opened); changed = true;
-    }
-  }
-  paper.closed = paper.closed.slice(-300);
-  if (changed) await env.STATE.put('paper', JSON.stringify(paper));
-  return opened ? `papel: abre ${opened.side} a ${opened.entry}` : 'papel: sin cambios';
+  if (action !== prev) await env.STATE.put('recAction', action);
 }
 
-// Cada 15 min: guarda velas, avisa de movimiento y actualiza la prueba en papel.
-async function checkAndNotify(env) {
-  const [raw1, raw15] = await Promise.all([fetchCandles(env, 1000), fetchCandles(env, 300, 'FifteenMinutes')]);
+// Al cierre de cada vela de 1 h: calcula los tres pasos, actualiza la prueba en papel y avisa.
+// pyr: estado de tu pirámide (si hay), para no mezclar los avisos de COMPRA/VENTA con los de la pirámide.
+async function systemCheck(env, pyr = null, force = false) {
+  const h = closedOnly(await fetchCandles(env, 1000, 'OneHour'), 'OneHour');
+  if (!h.length) return 'sistema: sin velas';
+  const lastT = h[h.length - 1].time;
+  const done = +((await env.STATE.get('sysT')) || 0);
+  if (!force && done === lastT) return 'sistema: sin vela nueva';
+  const e = globalThis.GoldSys.evaluate(h, { tail: 8, extraFed: extraFed(env) });
+  if (!e) return 'sistema: pocas velas';
+  const prevPaper = JSON.parse((await env.STATE.get('sysPaper')) || 'null');
+  const { state, events } = globalThis.GoldSys.paper(prevPaper, h, e.series);
+  const { series, ...snap } = e;
+  const out = [`${e.levelText} (${Math.round(e.prob * 100)} %)`];
+  const can = !!ntfyTarget(env);
+  const f = (x) => fmt(x, 2);
+  // 1) Aviso de movimiento probable (al entrar en ese nivel, como mucho 2 al día)
+  const prevLevel = (await env.STATE.get('sysLevel')) || 'BAJO';
+  if (e.level === 'ALTO' && prevLevel !== 'ALTO' && can) {
+    const day = new Date().toISOString().slice(0, 10), cnt = JSON.parse((await env.STATE.get('sysAlertDay')) || '{}');
+    if ((cnt.day === day ? cnt.n : 0) < 2) {
+      await ntfy(env, { title: 'Cortés: atento, movimiento probable en el oro', priority: 4, tags: ['zap'],
+        message: `Precio ${f(e.price)} $. Probabilidad de moverse más de un 0,8 % en 6 h: ${Math.round(e.prob * 100)} %.
+Por: ${e.reasons.join(', ') || 'varias medidas'}.
+Ahora toca esperar a que empiece: cierre de 1 h por encima de ${f(e.hh)} o por debajo de ${f(e.ll)}, o una vela de más de ${f(e.bigBar)} $. Tendencia diaria ${e.trend}.` });
+      await env.STATE.put('sysAlertDay', JSON.stringify({ day, n: (cnt.day === day ? cnt.n : 0) + 1 }));
+      out.push('aviso de movimiento');
+    }
+  }
+  await env.STATE.put('sysLevel', e.level);
+  // 2) Señales y cierres de la prueba en papel
+  for (const ev of events) {
+    const t = ev.trade;
+    if (ev.type === 'open') {
+      out.push('señal ' + t.side);
+      if (can && !pyr) await ntfy(env, { title: `Cortés: ${t.side} oro`, priority: 4, tags: [t.side === 'COMPRA' ? 'chart_with_upwards_trend' : 'chart_with_downwards_trend'],
+        message: `Precio ${f(t.signalPrice)} $. Movimiento probable + ${t.side === 'COMPRA' ? 'ruptura al alza' : 'ruptura a la baja'} a favor de la tendencia diaria.
+Cerrar hacia las ${hm(t.time + 3600 * (1 + globalThis.GoldSys.HOLD_H))} (6 h). Stop orientativo ${f(t.stop)} $ (2 ATR).
+Se sigue en papel: ventaja pequeña y sin demostrar. No es asesoramiento financiero.` });
+    } else {
+      out.push(`cierre ${t.pnl >= 0 ? '+' : ''}${t.pnl} $`);
+      if (can && !pyr) await ntfy(env, { title: `Cortés: cierra la ${t.side.toLowerCase()} de oro`, priority: 3, tags: ['checkered_flag'],
+        message: `Han pasado 6 h. Entrada ${f(t.entry)} $, salida ${f(t.exit)} $: ${t.pnl >= 0 ? '+' : ''}${f(t.pnl)} $ por onza en papel (con 0,5 $ de diferencial).` });
+    }
+  }
+  // 3) Víspera de noticia (una vez por noticia, cuando falta menos de 24 h)
+  const nx = e.nextEvent;
+  if (nx && nx.t - Date.now() / 1000 < 86400 && nx.t > Date.now() / 1000 && can) {
+    if (+((await env.STATE.get('newsWarned')) || 0) !== nx.t) {
+      await ntfy(env, { title: `Cortés: ${nx.name} ${madrid(nx.t, { weekday: 'long' })} a las ${hm(nx.t + 1800)}`, priority: 3, tags: ['calendar'],
+        message: `Suele mover mucho el oro (la vela de la noticia es 2-4 veces la normal). Hacia dónde, no se sabe de antemano: espera a la señal o no operes justo antes.` });
+      await env.STATE.put('newsWarned', String(nx.t)); out.push('aviso de noticia');
+    }
+  }
+  await env.STATE.put('sysPaper', JSON.stringify(state));
+  await env.STATE.put('sys', JSON.stringify({ ...snap, updatedAt: new Date().toISOString() }));
+  await env.STATE.put('sysT', String(lastT));
+  await logAction(env, actionOf(state), e.price);
+  return 'sistema: ' + out.join(', ');
+}
+
+// Cada 15 min: guarda velas, revisa la pirámide y, en la primera media hora tras el cierre de cada vela de 1 h, el sistema.
+async function checkAndNotify(env, force = false) {
+  const raw1 = await fetchCandles(env, 1000);
   await storeHistory(env, raw1);
-  const c1 = closedOnly(raw1, 'OneMinute'), c15 = closedOnly(raw15, 'FifteenMinutes');
+  const c1 = closedOnly(raw1, 'OneMinute');
   if (!c1.length || Date.now() / 1000 - c1[c1.length - 1].time > 20 * 60) return 'mercado cerrado';
   // Cada parte por separado: un fallo en una (p. ej. ntfy) no impide las demás.
-  const a = await movementAlert(env, c1, c15).catch((e) => 'movimiento: ERROR ' + e.message);
-  // La pirámide va antes que la dirección: si está abierta, los cambios de COMPRAR/VENDER/ESPERAR no se avisan.
-  // Si no se puede leer la cartera, se sigue con los avisos normales.
-  let sig = null;
-  try { sig = globalThis.GoldTA.stableSignal(c15, await getParams(env)); } catch { /* sin recomendación */ }
-  const p = await pyramidAlert(env, c1, sig ? sig.action : 'ESPERAR').catch((e) => ({ cur: null, text: 'pirámide: ERROR ' + e.message }));
-  const d = await directionAlert(env, c15, p.cur, sig).catch((e) => 'dirección: ERROR ' + e.message);
-  const b = await paperBreakout(env, c1).catch((e) => 'papel: ERROR ' + e.message);
-  return a + ' · ' + p.text + ' · ' + d + ' · ' + b;
+  const action = actionOf(JSON.parse((await env.STATE.get('sysPaper')) || 'null'));
+  const p = await pyramidAlert(env, c1, action).catch((e) => ({ cur: null, text: 'pirámide: ERROR ' + e.message }));
+  const s = force || new Date().getUTCMinutes() < 35 ? await systemCheck(env, p.cur, force).catch((e) => 'sistema: ERROR ' + e.message) : 'sistema: espera a la próxima hora';
+  return p.text + ' · ' + s;
 }
 
 // El cron va cada 5 min: la comprobación completa en la primera de cada cuarto de hora, y en las otras solo la pirámide.
 async function runCron(env, time = Date.now()) {
   let result, ok = true;
   const full = new Date(time).getUTCMinutes() % 15 < 5;
-  try { result = full ? await checkAndNotify(env) : await pyramidOnly(env); } catch (e) { ok = false; result = 'ERROR ' + e.message; }
+  try { result = full ? await checkAndNotify(env, time === 0) : await pyramidOnly(env); } catch (e) { ok = false; result = 'ERROR ' + e.message; }
   if (result.includes('ERROR')) ok = false;
   await env.STATE.put('cronLast', JSON.stringify({ t: new Date().toISOString(), ok, result })).catch(() => {});
   (ok ? console.log : console.error)('cron:', result);
@@ -288,7 +270,7 @@ async function status(env) {
     ntfy: target ? { server: target.server, topic: mask(target.topic), token: !!env.NTFY_TOKEN } : null,
     etoroKeys: Boolean(env.ETORO_API_KEY && env.ETORO_USER_KEY),
     cronLast: JSON.parse(cron || 'null'), ntfyLast: JSON.parse(last || 'null'),
-    moveLevel: await env.STATE.get('moveLevel'), recAction: await env.STATE.get('recAction'),
+    sysLevel: await env.STATE.get('sysLevel'), recAction: await env.STATE.get('recAction'),
     pyramid: { ...pyrOpts(env), last: JSON.parse((await env.STATE.get('pyr')) || 'null') },
   };
 }
@@ -369,18 +351,6 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    // Ajustes compartidos entre la app y los avisos. Cambiarlos exige el PIN (secreto ADMIN_PIN).
-    if (url.pathname.endsWith('/api/params')) {
-      if (request.method === 'GET') return json(await getParams(env));
-      if (request.method === 'POST') {
-        if (!env.ADMIN_PIN) return json({ error: 'Falta el secreto ADMIN_PIN en Cloudflare' }, 501);
-        if (request.headers.get('x-admin-pin') !== env.ADMIN_PIN) return json({ error: 'PIN incorrecto' }, 403);
-        const p = cleanParams(await request.json().catch(() => ({})));
-        await env.STATE.put('params', JSON.stringify(p));
-        return json(await getParams(env));
-      }
-      return json({ error: 'No permitido' }, 405);
-    }
     // Posiciones de tu cuenta de eToro: son privadas, así que piden el mismo PIN que los ajustes.
     if (url.pathname.endsWith('/api/portfolio')) {
       if (request.method !== 'GET') return json({ error: 'No permitido' }, 405);
@@ -409,10 +379,10 @@ export default {
     if (url.pathname.endsWith('/api/recs')) {
       return new Response((await env.STATE.get('recLog')) || 'null', { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
     }
-    if (url.pathname.endsWith('/api/paper')) {
-      return new Response((await env.STATE.get('paper')) || '{"open":[],"closed":[]}', {
-        headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
-      });
+    // Sistema en dos pasos: último cálculo y prueba en papel.
+    if (url.pathname.endsWith('/api/sistema')) {
+      const [sys, paper] = await Promise.all([env.STATE.get('sys'), env.STATE.get('sysPaper')]);
+      return new Response(`{"sys":${sys || 'null'},"paper":${paper || 'null'}}`, { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
     }
     if (url.pathname.endsWith('/api/history')) {
       const days = Math.min(HISTORY_DAYS_MAX, Math.max(1, +url.searchParams.get('days') || 14));
@@ -443,4 +413,4 @@ export default {
   },
 };
 
-export { checkAndNotify, directionAlert, runCron, ntfyTarget, status, pyramidAlert };
+export { checkAndNotify, systemCheck, runCron, ntfyTarget, status, pyramidAlert };

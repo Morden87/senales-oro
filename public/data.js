@@ -1,7 +1,8 @@
 // Fuentes de datos: eToro (directo o a través del servidor propio) y PAXG de Binance como respaldo sin claves.
 (function (root) {
   const ETORO = 'https://public-api.etoro.com';
-  const INTERVALS = { 1: 'OneMinute', 5: 'FiveMinutes', 15: 'FifteenMinutes' };
+  const INTERVALS = { 1: 'OneMinute', 5: 'FiveMinutes', 15: 'FifteenMinutes', 60: 'OneHour' };
+  const BINANCE = { 1: '1m', 5: '5m', 15: '15m', 60: '1h' };
   const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
     const r = (Math.random() * 16) | 0; return (c === 'x' ? r : (r & 3) | 8).toString(16);
   }));
@@ -64,7 +65,7 @@
   }
 
   async function paxgCandles(minutes, count = 1000) {
-    const r = await fetch(`https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=${minutes}m&limit=${count}`, { cache: 'no-store' });
+    const r = await fetch(`https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=${BINANCE[minutes]}&limit=${count}`, { cache: 'no-store' });
     if (!r.ok) throw new ApiError('Binance respondió ' + r.status, 'http');
     const j = await r.json();
     const candles = j.map((k) => ({ time: Math.floor(k[0] / 1000), open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] }));

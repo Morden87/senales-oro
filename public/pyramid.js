@@ -47,7 +47,7 @@
     };
   }
 
-  // prev: lo guardado en la comprobación anterior (o null). cur: state() de ahora (o null). action: recomendación actual.
+  // prev: lo guardado en la comprobación anterior (o null). cur: state() de ahora (o null). action: señal actual del sistema (COMPRAR, VENDER o ESPERAR).
   // range: { lo, hi } mínimo y máximo del precio desde la comprobación anterior, para no perder un toque breve entre comprobaciones.
   // Devuelve { alerts: [{ title, message, tags, priority }], memo } con memo = lo que hay que guardar para la próxima vez.
   function decide(prev, cur, price, action, opts = {}, range = null) {
@@ -56,7 +56,7 @@
     if (!cur) {
       if (prev && prev.ids && prev.ids.length) {
         alerts.push({ title: `Cortés: pirámide de ${prev.side} cerrada`, priority: 3, tags: ['checkered_flag'],
-          message: `Has cerrado ${prev.ids.length > 1 ? `los ${prev.ids.length} escalones` : 'el escalón'} (precio medio ${f2(prev.avg)} $, oro ahora a ${f2(price)} $).\nVuelven los avisos normales de COMPRAR, VENDER y ESPERAR.` });
+          message: `Has cerrado ${prev.ids.length > 1 ? `los ${prev.ids.length} escalones` : 'el escalón'} (precio medio ${f2(prev.avg)} $, oro ahora a ${f2(price)} $).\nVuelven los avisos normales de COMPRA y VENTA.` });
       }
       return { alerts, memo: null };
     }
@@ -104,7 +104,7 @@
           alerts.push({ title: `Cortés: límite de ${cur.maxSteps} escalones`, priority: 4, tags: ['no_entry'],
             message: `El oro ha llegado a ${f2(touch)} $ (ahora ${f2(price)} $), donde tocaría el escalón ${cur.steps + 1}, pero ya tienes el máximo. No añadas más.\n${summary}` });
         } else {
-          const warn = against ? `\nOjo: Cortés está en ${action}, con 15 min y 1 h en tu contra.` + (cur.mode === 'contra' ? ' Añadir ahora es promediar contra la tendencia; mejor esperar.' : ' Mejor no añadir.') : '';
+          const warn = against ? `\nOjo: Cortés tiene abierta una señal de ${action} (movimiento fuerte en tu contra).` + (cur.mode === 'contra' ? ' Añadir ahora es promediar contra la tendencia; mejor esperar.' : ' Mejor no añadir.') : '';
           alerts.push({ title: `Cortés: nivel del escalón ${cur.steps + 1}`, priority: against ? 3 : 4, tags: ['ladder'],
             message: `El oro ha llegado a ${f2(touch)} $ (nivel ${f2(cur.nextLevel)} $; ahora ${f2(price)} $). Si sigues el plan, añade otro escalón.${warn}\n${summary}` });
         }
@@ -126,10 +126,10 @@
         }
       }
     }
-    // 4) Tendencia en contra confirmada (la recomendación contraria ya exige 30 min seguidos y la tendencia de 1 h).
+    // 4) Señal contraria del sistema en dos pasos (movimiento probable + ruptura a favor de la tendencia diaria).
     if (against && !m.trend) {
       alerts.push({ title: `Cortés: tendencia en contra de tu ${cur.side}`, priority: 4, tags: ['warning'],
-        message: `Cortés ha pasado a ${action} (15 min y 1 h en tu contra).\n` + (cur.mode === 'contra' ? 'No añadas escalones mientras dure; vigila el stop.' : 'Valora cerrar o subir el stop.') + `\n${summary}` });
+        message: `Cortés ha dado señal de ${action}: movimiento fuerte en tu contra.\n` + (cur.mode === 'contra' ? 'No añadas escalones mientras dure; vigila el stop.' : 'Valora cerrar o subir el stop.') + `\n${summary}` });
       m.trend = true;
     } else if (!against && m.trend) m.trend = false;
     // Si el precio se aleja del nivel ya avisado, se puede volver a avisar al regresar.

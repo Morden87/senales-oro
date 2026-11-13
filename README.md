@@ -1,17 +1,23 @@
-# Cortés · señales del oro a 15 min
+# Cortés · el oro en dos pasos
 
-Web app (PWA) para Android que lee el histórico del oro (instrumento GOLD) desde la API pública de eToro, calcula seis medidores técnicos y los combina en una recomendación de **COMPRAR**, **VENDER** o **ESPERAR** para los próximos 15 minutos.
+Web app (PWA) para Android que lee las velas de 1 h del oro (instrumento GOLD) desde la API pública de eToro y responde, en orden, a tres preguntas: **¿viene un movimiento fuerte?**, **¿ha empezado?** y **¿hacia dónde?** Solo da **COMPRA** o **VENTA** cuando coinciden las tres.
 
-> No es asesoramiento financiero. El movimiento del oro a 15 minutos es mayormente ruido; la app solo recomienda y nunca opera.
+> No es asesoramiento financiero. La app solo avisa y anota en papel; nunca opera.
 
 ## Qué hace
 
-Un análisis de 2 años de XAU/USD de 1 minuto (Dukascopy, contrastado con eToro) no encontró ninguna regla técnica que prediga la **dirección** a 15 min, 1 h o 4 h mejor que el azar tras el spread. Lo que sí se puede prever es el **tamaño** del movimiento, a partir de la volatilidad (ATR) y la hora. Por eso Cortés es un indicador de movimiento:
+El planteamiento sale de un estudio con velas de 1 h de XAU/USD de dic 2021 a oct 2026 (Dukascopy). Las medidas se ajustaron con 2022-24 y se comprobaron con 2025-26. Los scripts están en la carpeta del proyecto `impulso-oro/cero/`.
 
-- Para 15 min, 1 h y 4 h muestra el alejamiento típico desde el precio actual, el rango esperado y la probabilidad de alejarse al menos una cantidad de referencia (5, 10 y 20 $ por defecto). Nivel BAJO (<30 %), MEDIO o ALTO (≥60 %).
-- Fórmula: ATR(14) × √(barras del horizonte) × ajuste horario (actividad típica por hora UTC), calibrado con los propios datos (mediana real/previsto y dispersión logarítmica). 15 min usa velas de 1 min; 1 h y 4 h, velas de 15 min.
-- **Ruptura de 1 h en papel**: cierre de 1 h por encima del máximo (o debajo del mínimo) de las 20 anteriores a favor de la tendencia diaria (cierre vs EMA 20 diaria). El servidor la anota y la cierra 4 h después, con 0,5 $ de spread. Es la única pista débil del análisis, sin confirmar.
-- La recomendación (seis medidores: EMA, MACD, RSI, Bollinger, Estocástico, impulso) se calcula con velas de 15 min cerradas en modo tendencia. Solo da COMPRAR o VENDER si la señal se mantiene 2 velas seguidas (30 min), la tendencia de 1 h (EMA 9/21 y pendiente de la EMA 21) va a favor y el precio no está a más de 3 ATR de su EMA 21 (para no entrar tarde). Indica si la tendencia está recién empezada, en curso o avanzada. Es solo informativa.
+1. **¿Viene movimiento?** Calcula la probabilidad de que el oro se aleje más de un 0,8 % en las 6 h siguientes. Usa pesos fijos sobre ocho medidas: la volatilidad (ATR de 1 h y de 5 días, en % del precio), la actividad típica de la hora que empieza, si hay una noticia NFP o de la Fed (en las próximas 2 h o en las 3 últimas), el rango de la última vela, si la vela es muy estrecha (NR7) y la anchura de las bandas de Bollinger. Niveles: *Tranquilo*, *Atento* y *Movimiento probable*. Este último es el 20 % de horas más altas de las semanas anteriores. Con ese aviso, un movimiento fuerte fue unas 2,5 veces más probable (en 2025-26, el 58 % frente al 21 % y el 78 % frente al 42 %; AUC 0,74).
+2. **¿Ha empezado?** Una vela de 1 h cierra por encima del máximo o por debajo del mínimo de las 20 anteriores, o es una vela de más de 1,2 ATR. Solo cuenta con el paso 1 en *Movimiento probable*.
+3. **¿Hacia dónde?** La tendencia diaria: el cierre diario frente a su EMA 20, hasta el día anterior. De 19 medidas de dirección probadas, fue la única que aguantó casi todos los años. Seguir la dirección de la propia ruptura perdía.
+
+Con los tres pasos (unas 5 señales por semana, salida a las 6 h, 0,5 $ de diferencial), la ganancia media por operación fue de −0,05, +0,16, +0,21, +0,18 y −0,16 ATR en 2022, 2023, 2024, 2025 y 2026. Es una ventaja pequeña y sin demostrar: depende del tipo de mercado y falla en los giros bruscos. Por eso la app la **sigue en papel** antes de que arriesgues dinero.
+
+- Junto a cada señal muestra la entrada, la hora de cierre (6 h) y un stop orientativo de 2 ATR. En el estudio, un stop de 2-3 ATR apenas cambiaba el resultado; sirve para limitar una mala racha.
+- **Seguimiento en papel** (en el servidor): cada señal entra en la apertura de la vela siguiente y se cierra con el cierre de la 6.ª vela, con 0,5 $ de diferencial. Mientras hay una abierta no se abre otra. Al lado se anota la misma ruptura sin el paso 1, para comparar. Regla: tras unas 60 señales (unos 3 meses), si la media no supera +0,1 ATR por operación, se retira. `GET /api/sistema` devuelve el último cálculo y el papel.
+- Calendario: el NFP se calcula solo (primer viernes del mes, 14:30 en España). Las fechas de la Fed (de federalreserve.gov; las de 2027 son provisionales) están en `public/sistema.js`. Para añadir más, usa la variable `FED_DATES` con fechas `AAAA-MM-DD` separadas por comas. La inflación (IPC) no se incluye.
+- Toda la lógica está en `public/sistema.js`, sin red. La usan el Worker y la app, así que los dos calculan lo mismo. Se comprobó que da exactamente las mismas 1.336 señales que el estudio en Python.
 
 ## Claves de eToro
 
@@ -51,37 +57,37 @@ npx wrangler secret put ETORO_USER_KEY  # pega la User Key
 npx wrangler deploy
 ```
 
-## Estrategias, histórico y optimizador
+## Histórico de 1 min
 
-- **Estrategia** (Ajustes): *Tendencia* (por defecto) (EMA, MACD e impulso deciden; RSI, Bollinger y Estocástico solo vetan extremos en contra) , *Mixto* (votan los seis medidores) o *Rebote* (al revés).
-- **Coincidencia mínima** entre medidores (50/60/75 %) y filtro opcional **a favor de la tendencia de 15 min** (EMA 9/21 sobre velas de 15 min ya cerradas).
-- Las señales se calculan siempre con la **última vela cerrada**.
-- Sin filtro de horario: se trabaja las ~23 h diarias de lunes a viernes en que cotiza el oro. Los huecos (pausa diaria, fin de semana) se excluyen de la prueba histórica.
-- Cada 15 min el servidor guarda las velas de 1 min en KV (una clave por día, 30 días). `GET /api/history?days=N` las devuelve.
-- **Optimizador** (botón en la app): prueba 90 combinaciones con el 70 % más antiguo del histórico y las valida con el 30 % más reciente. Solo recomienda aplicar si también mejora en esa parte no vista. Al aplicar, los ajustes se guardan en el servidor (`POST /api/params`, cabecera `x-admin-pin`) y los usan la app y los avisos.
+Cada 15 min el servidor guarda las velas de 1 min en KV (una clave por día, 30 días). `GET /api/history?days=N` las devuelve. Las usa la tarjeta que compara tus operaciones con Cortés.
 
 ## Avisos por ntfy
 
-Cada 15 minutos (el cron de Cloudflare va cada 5 min, `*/5 * * * *`, y la comprobación completa se hace una de cada tres veces) el Worker descarga velas de 1 y 15 min de GOLD, calcula el movimiento esperado y avisa a ntfy cuando la recomendación pasa a COMPRAR o VENDER (y cuando vuelve a ESPERAR), y cuando el nivel de la **próxima hora** pasa a ALTO (≥60 % de alejarse 10 $) y cuando deja de serlo. Con el mercado cerrado no avisa. Funciona con el móvil apagado. En el móvil instala la app ntfy y suscríbete al mismo tema. En ntfy.sh cualquiera que adivine el nombre del tema puede leerlo, así que elige uno difícil de adivinar.
+El cron de Cloudflare va cada 5 min (`*/5 * * * *`). Una de cada tres veces (cada 15 min) el Worker guarda las velas de 1 min y revisa tu pirámide. En la primera media hora tras el cierre de cada vela de 1 h, además, calcula los tres pasos con las últimas 1.000 velas de 1 h (unas 6 semanas), actualiza el papel y avisa por ntfy de esto:
 
-Solo se recomienda COMPRAR o VENDER si el recorrido probable en 15 min (ATR × √15) es de al menos `MIN_MOVE` dólares (5 por defecto, también ajustable en Ajustes de la app); el objetivo se fija a esa distancia como mínimo.
+- **"Atento: movimiento probable"** al pasar a ese nivel, como mucho 2 al día, con los niveles de ruptura que vigilar.
+- **"COMPRA / VENTA oro"** con el precio, la hora de cierre y el stop orientativo.
+- **"Cierra la compra / venta"** a las 6 h, con el resultado en papel.
+- **Víspera de noticia**: menos de 24 h antes de un NFP o de una decisión de la Fed.
+
+Con el mercado cerrado no avisa. Funciona con el móvil apagado. En el móvil, instala la app ntfy y suscríbete al mismo tema. En ntfy.sh cualquiera que adivine el nombre del tema puede leerlo, así que elige uno difícil de adivinar.
 
 **Si no llegan los avisos**: abre Ajustes (⚙︎) en la app. La sección *Avisos por ntfy* muestra si el servidor tiene el tema configurado, cuándo fue la última comprobación automática y si el último envío funcionó o qué respondió ntfy. El botón *Enviar aviso de prueba* (pide el PIN) manda un aviso al momento y lanza la comprobación. Lo mismo en `GET /api/status` y `POST /api/ntfy-test?run=1` (cabecera `x-admin-pin`). `NTFY_TOPIC` puede ser solo el nombre del tema o la dirección completa (`https://ntfy.sh/tu-tema`). Si ntfy falla, el cambio de estado no se da por avisado y se reintenta en la siguiente comprobación.
 
 ### Modo pirámide
 
-Si tienes abierta alguna posición propia de oro en eToro (se lee con las mismas claves, solo lectura), el Worker la trata como una pirámide y cambia los avisos. Mientras esté abierta no avisa de cada cambio entre COMPRAR, VENDER y ESPERAR, y solo avisa de esto:
+Si tienes abierta alguna posición propia de oro en eToro (se lee con las mismas claves, solo lectura), el Worker la trata como una pirámide y cambia los avisos. Mientras esté abierta no manda los avisos de COMPRA, VENTA y cierre del sistema (sí los de movimiento probable y noticias), y avisa de esto:
 
 - **Pirámide abierta, escalón añadido o cerrado, pirámide cerrada**, con precio medio, próximo escalón, stop y TP. Cada posición de oro abierta cuenta como un escalón.
 - **Nivel del siguiente escalón**: el precio se ha alejado `PYR_STEP` $ (20) en tu contra desde el escalón más lejano. Si Cortés está en la dirección contraria, te lo advierte. Si ya tienes `PYR_MAX_STEPS` (5), te avisa de que no añadas más.
 - **Stop de la pirámide**: un escalón más allá del último permitido (con 5 escalones de 20 $, 100 $ por debajo del primero si compras). Con `PYR_MAX_LOSS` > 0, además, el precio en que toda la pirámide pierde esa cantidad, el que llegue antes.
 - **TP común**: el precio en que toda la pirámide gana `PYR_TP_PCT` % (5) de lo invertido, sin contar comisiones ni el diferencial. Poniendo ese TP en todas las posiciones de oro, se cierran juntas con esa ganancia. Sale también en la tarjeta *Mis posiciones* de la app, y hay aviso cuando el precio llega.
 - **Vuelta a precio medio** después de haber estado al menos medio escalón en pérdidas.
-- **Tendencia en contra confirmada**: la recomendación pasa a la contraria (30 min en 15 min y la tendencia de 1 h).
+- **Señal en contra**: el sistema da una señal de COMPRA o VENTA contraria a tu pirámide.
 
 Los niveles se comparan con el mínimo y el máximo de las velas de 1 min desde la comprobación anterior, para no perder un toque breve. Entre las comprobaciones de 15 min, cada 5 min se revisa solo la pirámide. Al cerrarlo todo vuelven los avisos normales. Ajustes en `[vars]` de `wrangler.toml`: `PYR_MODE` (`contra` para promediar, o `favor` si añades cuando el precio va a tu favor), `PYR_STEP`, `PYR_MAX_STEPS`, `PYR_MAX_LOSS` y `PYR_TP_PCT`. El estado se ve en `GET /api/status` (`pyramid`).
 
-Opcional: `NTFY_SERVER` (en `[vars]`, por defecto https://ntfy.sh), el secreto `NTFY_TOKEN` si tu servidor pide autenticación, `APP_URL` para abrir la app al tocar el aviso y `THRESHOLD` para la exigencia (0.22 por defecto).
+Opcional: `NTFY_SERVER` (en `[vars]`, por defecto https://ntfy.sh), el secreto `NTFY_TOKEN` si tu servidor pide autenticación, `APP_URL` para abrir la app al tocar el aviso.
 
 Abre en Chrome de Android la URL `https://senales-oro.<tu-cuenta>.workers.dev` → menú ⋮ → **Añadir a pantalla de inicio**.
 
@@ -91,6 +97,6 @@ También funciona como web estática (GitHub Pages, Netlify…) con las claves e
 
 ## Archivos
 
-- `public/` la app: `index.html`, `app.js` (interfaz), `indicators.js` (indicadores y señales), `data.js` (eToro y Binance), `sw.js`, `manifest.webmanifest`, iconos, `lwc.js` (TradingView Lightweight Charts 4.2.0, Apache-2.0).
+- `public/` la app: `index.html`, `app.js` (interfaz), `sistema.js` (los tres pasos, el papel y el calendario, sin red), `data.js` (eToro y Binance), `review.js` e `indicators.js` (comparación con tus operaciones; `indicators.js` solo recalcula la recomendación antigua para operaciones anteriores al registro), `sw.js`, `manifest.webmanifest`, iconos, `lwc.js` (TradingView Lightweight Charts 4.2.0, Apache-2.0).
 - `public/pyramid.js` lógica de la pirámide (estado, TP y avisos, sin red).
 - `worker.js`, `wrangler.toml` intermediario, avisos ntfy programados y despliegue en Cloudflare.
