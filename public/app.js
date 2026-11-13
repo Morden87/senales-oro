@@ -1,33 +1,19 @@
 (function () {
   const $ = (id) => document.getElementById(id);
-  const TA = window.GoldTA, MV = window.GoldMove, Data = window.GoldData, RV = window.GoldReview;
+  const TA = window.GoldTA, SYS = window.GoldSys, Data = window.GoldData, RV = window.GoldReview;
   const REFRESH_MS = 30000, SLOW_MS = 5 * 60000;
 
   const store = {
     get() { try { return JSON.parse(localStorage.getItem('oro.cfg') || '{}'); } catch { return {}; } },
     set(v) { try { localStorage.setItem('oro.cfg', JSON.stringify(v)); } catch { /* sin almacenamiento */ } },
   };
-  const cfg = Object.assign({ source: 'etoro', apiKey: '', userKey: '', pin: '', notify: false, refs: { m15: 5, h1: 10, h4: 20 } }, store.get());
+  const cfg = Object.assign({ source: 'etoro', apiKey: '', userKey: '', pin: '', notify: false }, store.get());
   cfg.proxy = false;
-  // Parámetros del motor de dirección (informativo). Con servidor, se guardan allí.
-  const PARAM_KEYS = ['mode', 'threshold', 'agree', 'htf', 'minMove'];
-  const pick = (o) => Object.fromEntries(PARAM_KEYS.filter((k) => o && o[k] !== undefined).map((k) => [k, o[k]]));
-  let params = { ...pick(TA.DEFAULTS), ...pick(cfg.params) };
-  let timer = null, busy = false, lastLevel = null;
-  let slow = { at: 0, c15: null, history: [], paper: null, pf: null, rv: null, rvAt: 0 }; // datos que cambian despacio
-  const save = () => { const { proxy, ...persist } = cfg; persist.params = params; store.set(persist); };
-  const paramsText = (p) => `${TA.MODES[p.mode] || p.mode} · exigencia ${(+p.threshold).toFixed(2)} · coincidencia ${Math.round(p.agree * 100)}%${p.htf ? ' · con tendencia 15 min' : ''}`;
+  let timer = null, busy = false, last = null; // last: { level, signalT } para los avisos con la app abierta
+  let slow = { at: 0, sys: null, pf: null, rv: null, rvAt: 0 }; // datos que cambian despacio
+  const save = () => { const { proxy, params, refs, ...persist } = cfg; store.set(persist); };
 
   async function getJSON(url) { try { const r = await fetch(url, { cache: 'no-store' }); return r.ok ? r.json() : null; } catch { return null; } }
-  async function loadServerParams() { const j = await getJSON('api/params'); if (j) { params = { ...params, ...pick(j) }; save(); } }
-  async function pushServerParams(p) {
-    if (!cfg.proxy) { params = { ...params, ...pick(p) }; save(); return; }
-    if (!cfg.pin) throw new Error('Escribe tu PIN en Ajustes para cambiar los ajustes de dirección.');
-    const r = await fetch('api/params', { method: 'POST', headers: { 'content-type': 'application/json', 'x-admin-pin': cfg.pin }, body: JSON.stringify(pick(p)) });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(j.error || 'El servidor respondió ' + r.status);
-    params = { ...params, ...pick(j) }; save();
-  }
 
   // ---------- gráfico ----------
   const chart = LightweightCharts.createChart($('chart'), {
@@ -38,71 +24,80 @@
     localization: { locale: 'es-ES' }, autoSize: true,
   });
   const candleS = chart.addCandlestickSeries({ upColor: '#2fbf71', downColor: '#e5534b', borderVisible: false, wickUpColor: '#2fbf71', wickDownColor: '#e5534b' });
-  const e21 = chart.addLineSeries({ color: '#7aa2f7', lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
-  let bands = [], fitted = false;
+  let lines = [], fitted = false;
 
-  const line = (candles, arr) => candles.map((k, i) => ({ time: k.time, value: arr[i] })).filter((p) => !isNaN(p.value));
   const fmt = (x, d = 2) => (x == null || isNaN(x) ? '—' : x.toLocaleString('es-ES', { minimumFractionDigits: d, maximumFractionDigits: d }));
-  const pct = (x) => (isNaN(x) ? '—' : Math.round(x * 100) + '%');
+  const pct = (x) => (x == null || isNaN(x) ? '—' : Math.round(x * 100) + '%');
   const hhmm = (t) => new Date(t * 1000).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+  const dayhm = (t) => new Date(t * 1000).toLocaleString('es-ES', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
   function showError(msg) { const e = $('err'); e.textContent = msg || ''; e.style.display = msg ? 'block' : 'none'; }
+  const CHIP = { BAJO: 'BAJO', MEDIO: 'MEDIO', ALTO: 'ALTO' };
 
-  // Une el histórico guardado en el servidor con las velas recién descargadas.
-  function merged(c1) {
-    const by = new Map(slow.history.map((k) => [k[0], { time: k[0], open: k[1], high: k[2], low: k[3], close: k[4] }]));
-    for (const k of c1) by.set(k.time, k);
-    return [...by.values()].sort((a, b) => a.time - b.time).slice(-6000); // ~4 días bastan para calibrar
-  }
-
-  function renderMovement(c1, live) {
-    const f = MV.forecast({ 1: merged(c1), ...(slow.c15 ? { 15: slow.c15 } : {}) }, cfg.refs);
-    const px = live && isFinite(live.bid) ? live.bid : c1[c1.length - 1].close;
+  // ---------- los tres pasos ----------
+  function renderSystem(e, live, hourly) {
+    const px = live && isFinite(live.bid) ? live.bid : hourly[hourly.length - 1].close;
     $('price').textContent = '$' + fmt(px) + (live && isFinite(live.ask) ? '  ·  ask ' + fmt(live.ask) : '');
-    $('mv').innerHTML = f.map((x) => `<div><div class="h">${x.label}</div><div class="r">±${fmt(x.excursion, 1)} $</div>
-      <div class="p">rango ~${fmt(x.range, 0)} $</div><div class="pbar"><i style="width:${Math.round(x.prob * 100)}%"></i></div>
-      <div class="p">${pct(x.prob)} de alejarse ≥${x.ref} $</div><span class="chip ${x.level}">${x.level}</span></div>`).join('');
-    const h1 = f.find((x) => x.id === 'h1');
-    const cal = f.length && f.every((x) => x.calibrated) ? 'calibrado con ' + Math.min(...f.map((x) => x.samples)).toLocaleString('es-ES') + '+ ventanas pasadas'
-      : 'calibración provisional: aún hay pocos datos guardados';
-    $('moveNote').textContent = `Alejamiento típico desde el precio actual según la volatilidad y la hora (UTC ${new Date().getUTCHours()} h) · ${cal}.`;
-    bands.forEach((b) => candleS.removePriceLine(b)); bands = [];
-    if (h1) for (const s of [1, -1]) bands.push(candleS.createPriceLine({ price: px + s * h1.excursion, color: '#e2b23c', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '1 h' }));
-    if (h1 && lastLevel && h1.level === 'ALTO' && lastLevel !== 'ALTO') notify(h1);
-    if (h1) lastLevel = h1.level;
-  }
-
-  function renderDirection(c1) {
-    const I = TA.computeAll(c1);
-    const s = TA.stableSignal(slow.c15, params);
-    const act = $('act'); act.textContent = s.action; act.className = 'act ' + s.action;
-    $('reason').textContent = s.reason + (s.action !== 'ESPERAR' && s.since ? ` (desde las ${hhmm(s.since)})` : '');
-    $('paramsLine').textContent = 'Velas de 15 min cerradas · ' + paramsText(params);
-    $('meters').innerHTML = s.parts.map((p) => {
-      const w = Math.abs(p.v) * 45, left = p.v >= 0 ? 50 : 50 - w;
-      const cls = p.v > 0.1 ? 'up' : p.v < -0.1 ? 'dn' : 'nt';
-      const tag = p.v > 0.1 ? 'Alcista' : p.v < -0.1 ? 'Bajista' : 'Neutral';
-      const col = p.v > 0.1 ? 'var(--buy)' : p.v < -0.1 ? 'var(--sell)' : 'var(--muted)';
-      return `<div class="row"><div class="n">${p.name}<small>${p.txt}</small></div>
-        <div class="bar"><i style="left:${left}%;width:${Math.max(w, 2)}%;background:${col}"></i></div><div class="tag ${cls}">${tag}</div></div>`;
-    }).join('');
-    return I;
+    $('updated').textContent = `Última vela de 1 h cerrada: ${hhmm(e.time)}–${hhmm(e.closeTime)} · actualizado ${new Date().toLocaleTimeString('es-ES')}`;
+    // ①
+    const lv = $('lvl'); lv.textContent = e.levelText; lv.className = 'chip big ' + CHIP[e.level];
+    $('prob').textContent = pct(e.prob);
+    $('probBar').style.width = Math.min(100, Math.round(e.prob * 100)) + '%';
+    $('probThr').style.left = isFinite(e.threshold) ? Math.min(100, e.threshold * 100) + '%' : '-10px';
+    $('why').textContent = `Probabilidad de que el oro se mueva más de un 0,8 % en las próximas 6 h. "Movimiento probable" desde ${pct(e.threshold)} (marca blanca: el 20 % de horas más altas de las últimas semanas).` +
+      (e.reasons.length ? ' Ahora pesa: ' + e.reasons.join(', ') + '.' : '');
+    $('news').textContent = e.nextEvent ? `Próxima noticia: ${e.nextEvent.name}, ${dayhm(e.nextEvent.t + 1800)} (hora de este móvil).` : '';
+    // ②
+    const on1 = e.level === 'ALTO';
+    $('s2').classList.toggle('off', !on1); $('s3').classList.toggle('off', !on1);
+    $('start').textContent = !on1 ? 'En espera del paso 1' : e.step2;
+    $('start').className = 'state ' + (on1 && e.bdir > 0 ? 'up' : on1 && e.bdir < 0 ? 'dn' : 'nt');
+    $('hh').textContent = fmt(e.hh); $('ll').textContent = fmt(e.ll); $('big').textContent = fmt(e.bigBar, 1) + ' $';
+    // ③
+    $('trend').innerHTML = `Tendencia diaria <b class="${e.trend === 'alcista' ? 'up' : e.trend === 'bajista' ? 'dn' : 'nt'}">${e.trend}</b>: cierre diario frente a su media de 20 días (${fmt(e.ema20d)}). Solo se opera a su favor.`;
+    // Señal vigente: la operación abierta en papel (servidor) o, sin servidor, la de las últimas 6 h.
+    const paper = slow.sys && slow.sys.paper;
+    let open = paper && paper.open && paper.open[0];
+    if (!cfg.proxy) {
+      const s = e.series, n = s.length; open = null;
+      for (let i = n - 1; i >= Math.max(0, n - SYS.HOLD_H); i--) if (s[i] && s[i].signal) { open = { side: s[i].side > 0 ? 'COMPRA' : 'VENTA', time: s[i].time, signalPrice: s[i].price, stop: s[i].price - s[i].side * SYS.STOP_ATR * s[i].atr, entry: hourly.find((k) => k.time === s[i].time + 3600)?.open ?? null }; break; }
+    }
+    const act = $('act');
+    if (open) {
+      act.textContent = open.side; act.className = 'act ' + open.side;
+      $('actWhy').textContent = `Señal de las ${hhmm(open.time + 3600)}: movimiento probable + ruptura a favor de la tendencia diaria.`;
+      $('trade').style.display = '';
+      $('tEntry').textContent = fmt(open.entry ?? open.signalPrice); $('tExit').textContent = hhmm(open.time + 3600 * (1 + SYS.HOLD_H)); $('tStop').textContent = fmt(open.stop);
+    } else {
+      act.textContent = 'ESPERAR'; act.className = 'act ESPERAR'; $('trade').style.display = 'none';
+      $('actWhy').textContent = e.note || (on1 ? 'Falta que empiece el movimiento a favor de la tendencia diaria.' : 'Sin aviso de movimiento.');
+    }
+    // gráfico
+    lines.forEach((l) => candleS.removePriceLine(l)); lines = [];
+    lines.push(candleS.createPriceLine({ price: e.hh, color: '#2fbf71', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'máx 20 h' }));
+    lines.push(candleS.createPriceLine({ price: e.ll, color: '#e5534b', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'mín 20 h' }));
+    if (open) lines.push(candleS.createPriceLine({ price: open.stop, color: '#e2b23c', lineWidth: 1, lineStyle: 0, axisLabelVisible: true, title: 'stop' }));
+    // avisos con la app abierta
+    if (last && e.level === 'ALTO' && last.level !== 'ALTO') notify('Cortés: atento, movimiento probable', `Probabilidad ${pct(e.prob)}. Espera la ruptura a favor de la tendencia diaria (${e.trend}).`);
+    if (last && open && last.signalT !== open.time) notify(`Cortés: ${open.side} oro`, `Precio ${fmt(open.signalPrice)} $. Cerrar a las ${hhmm(open.time + 3600 * (1 + SYS.HOLD_H))}. Stop orientativo ${fmt(open.stop)} $.`);
+    last = { level: e.level, signalT: open ? open.time : null };
   }
 
   function renderPaper() {
-    const el = $('paper'), p = slow.paper;
-    if (!cfg.proxy) { el.textContent = 'Solo disponible con tu servidor de Cloudflare.'; return; }
-    if (!p) { el.textContent = 'Sin datos todavía.'; return; }
-    const closed = p.closed || [], open = p.open || [];
-    const total = closed.reduce((a, t) => a + t.pnl, 0), wins = closed.filter((t) => t.pnl > 0).length;
-    let html = closed.length
-      ? `<p><b>${closed.length}</b> operaciones cerradas · ${wins} ganadoras · resultado total <b class="${total >= 0 ? 'up' : 'dn'}">${total >= 0 ? '+' : ''}${fmt(total)} $</b> (${fmt(total / closed.length)} $ de media). Hacen falta unas 250 para sacar conclusiones.</p>`
-      : '<p>Todavía no se ha producido ninguna ruptura. Suele haber una cada dos días.</p>';
-    if (open.length) html += `<p>Abierta: <b>${open[0].side}</b> desde ${fmt(open[0].entry)} $ (${hhmm(open[0].time + 3600)}), se cierra hacia las ${hhmm(open[0].time + 3600 + 4 * 3600)}.</p>`;
-    if (closed.length) html += '<table class="pp"><tr><th>Entrada</th><th>Lado</th><th>Precio</th><th>Salida</th><th>Resultado</th></tr>' +
-      closed.slice(-8).reverse().map((t) => `<tr><td>${new Date((t.time + 3600) * 1000).toLocaleString('es-ES', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</td><td>${t.side}</td><td>${fmt(t.entry)}</td><td>${fmt(t.exit)}</td><td class="${t.pnl >= 0 ? 'up' : 'dn'}">${t.pnl >= 0 ? '+' : ''}${fmt(t.pnl)}</td></tr>`).join('') + '</table>';
+    const el = $('paper'), p = slow.sys && slow.sys.paper;
+    if (!cfg.proxy) { el.textContent = 'Solo disponible con tu servidor de Cloudflare: es el que anota las señales aunque el móvil esté apagado.'; return; }
+    if (!p) { el.textContent = 'Todavía no hay datos: el servidor empieza a anotar en la próxima vela de 1 h.'; return; }
+    const a = SYS.stats(p.closed), b = SYS.stats(p.base && p.base.closed);
+    const sign = (x, d = 2) => (x == null ? '—' : (x >= 0 ? '+' : '') + fmt(x, d));
+    let html = '<table class="pp"><tr><th></th><th>Ops.</th><th>Aciertos</th><th>Total $</th><th>Media ATR</th></tr>' +
+      `<tr><td><b>Dos pasos</b></td><td>${a.n}</td><td>${pct(a.hit)}</td><td class="${a.total >= 0 ? 'up' : 'dn'}">${sign(a.total)}</td><td class="${(a.avgAtr || 0) >= 0 ? 'up' : 'dn'}">${sign(a.avgAtr)}</td></tr>` +
+      `<tr><td>Sin el paso 1</td><td>${b.n}</td><td>${pct(b.hit)}</td><td class="${b.total >= 0 ? 'up' : 'dn'}">${sign(b.total)}</td><td>${sign(b.avgAtr)}</td></tr></table>`;
+    html += `<p>${a.n < 60 ? `Llevas ${a.n} de unas 60 señales para decidir.` : (a.avgAtr > 0.1 ? 'Supera +0,1 ATR por operación: se puede seguir.' : 'No supera +0,1 ATR por operación: según la regla, retirarlo.')} Resultado por onza, con 0,5 $ de diferencial.${p.since ? ' Anotando desde ' + dayhm(p.since) + '.' : ''}</p>`;
+    const o = (p.open || [])[0];
+    if (o) html += `<p>Abierta: <b>${o.side}</b> desde ${fmt(o.entry ?? o.signalPrice)} $ (${dayhm(o.time + 3600)}), se cierra hacia las ${hhmm(o.time + 3600 * (1 + SYS.HOLD_H))}.</p>`;
+    if (p.closed && p.closed.length) html += '<table class="pp"><tr><th>Entrada</th><th>Lado</th><th>Precio</th><th>Salida</th><th>$</th></tr>' +
+      p.closed.slice(-10).reverse().map((t) => `<tr><td>${dayhm(t.time + 3600)}</td><td>${t.side}</td><td>${fmt(t.entry)}</td><td>${fmt(t.exit)}</td><td class="${t.pnl >= 0 ? 'up' : 'dn'}">${sign(t.pnl)}</td></tr>`).join('') + '</table>';
     el.innerHTML = html;
   }
-
 
   // ---------- posiciones de eToro ----------
   async function loadPortfolio() {
@@ -156,8 +151,8 @@
     if (slow.rv && Date.now() - slow.rvAt < 30 * 60000) return slow.rv;
     const [h, log] = await Promise.all([getJSON('api/history?days=30'), getJSON('api/recs')]);
     const c1 = ((h && h.candles) || []).map((k) => ({ time: k[0], open: k[1], high: k[2], low: k[3], close: k[4] }));
-    const c15 = MV.resample(c1, 15).filter((k) => k.time + 900 <= Date.now() / 1000);
-    const res = RV.analyze({ open: p.open, closed: p.closed, c15, params, log, from: p.statsFrom });
+    const c15 = SYS.resample(c1, 15).filter((k) => k.time + 900 <= Date.now() / 1000);
+    const res = RV.analyze({ open: p.open, closed: p.closed, c15, params: TA.DEFAULTS, log, from: p.statsFrom });
     res.from = c15.length ? c15[0].time : null;
     slow.rvAt = Date.now();
     return res;
@@ -203,23 +198,22 @@
 
   function render(res) {
     const { candles, live, label } = res;
-    if (candles.length < 80) throw new Error('Pocas velas recibidas (' + candles.length + '). El mercado puede estar cerrado.');
+    const now = Date.now() / 1000;
+    const closed = candles.filter((k) => k.time + 3600 <= now);
+    if (closed.length < 400) throw new Error('Pocas velas de 1 h recibidas (' + closed.length + '). El mercado puede estar cerrado.');
     $('src').textContent = label;
-    const I = renderDirection(candles);
-    renderMovement(candles, live);
+    const e = SYS.evaluate(closed, { tail: 48 });
+    renderSystem(e, live, closed);
     renderPaper();
-    $('updated').textContent = 'Última vela ' + hhmm(candles[candles.length - 1].time) + ' · actualizado ' + new Date().toLocaleTimeString('es-ES');
     candleS.setData(candles.map(({ time, open, high, low, close }) => ({ time, open, high, low, close })));
-    e21.setData(line(candles, I.ema21));
     if (!fitted) { chart.timeScale().setVisibleLogicalRange({ from: candles.length - 120, to: candles.length + 3 }); fitted = true; }
   }
 
-  function notify(h1) {
+  function notify(title, body) {
     if (!cfg.notify || !('Notification' in window) || Notification.permission !== 'granted') return;
-    const body = `Próxima hora: ±${fmt(h1.excursion, 1)} $ (${pct(h1.prob)} de alejarse ≥${h1.ref} $). Indica tamaño, no dirección.`;
     navigator.serviceWorker && navigator.serviceWorker.ready
-      .then((reg) => reg.showNotification('Cortés: se espera mucho movimiento', { body, icon: 'icon-192.png', tag: 'oro' }))
-      .catch(() => new Notification('Cortés: se espera mucho movimiento', { body }));
+      .then((reg) => reg.showNotification(title, { body, icon: 'icon-192.png', tag: 'oro' }))
+      .catch(() => new Notification(title, { body }));
     if (navigator.vibrate) navigator.vibrate(200);
   }
 
@@ -240,10 +234,8 @@
   async function refreshSlow() {
     if (Date.now() - slow.at < SLOW_MS) return;
     slow.at = Date.now();
-    try { slow.c15 = (await Data.load(cfg, 15)).candles.filter((k) => k.time + 900 <= Date.now() / 1000); } catch { slow.c15 = null; }
     if (cfg.proxy) {
-      const [h, p] = await Promise.all([getJSON('api/history?days=4'), getJSON('api/paper')]);
-      slow.history = (h && h.candles) || []; slow.paper = p;
+      slow.sys = await getJSON('api/sistema');
       refreshAccount(); // en segundo plano: si eToro tarda, el resto de la app no espera
     }
   }
@@ -253,7 +245,7 @@
     try {
       await refreshSlow();
       renderAccount();
-      const res = await Data.load(cfg, 1);
+      const res = await Data.load(cfg, 60);
       showError(''); render(res);
     } catch (e) {
       showError(e.message);
@@ -266,25 +258,23 @@
   // ---------- ajustes ----------
   function syncSettingsUI() {
     $('source').value = cfg.source; $('apiKey').value = cfg.apiKey; $('userKey').value = cfg.userKey;
-    for (const k of ['m15', 'h1', 'h4']) $('ref_' + k).value = cfg.refs[k];
-    $('mode').value = params.mode; $('threshold').value = String(params.threshold); $('agree').value = String(params.agree);
-    $('htf').checked = !!params.htf; $('pin').value = cfg.pin; $('notify').checked = !!cfg.notify;
+    $('pin').value = cfg.pin; $('notify').checked = !!cfg.notify;
     $('pinBox').style.display = cfg.proxy ? '' : 'none';
     $('ntfyBox').style.display = cfg.proxy ? '' : 'none';
     $('etoroBox').style.display = cfg.source === 'etoro' ? '' : 'none';
     $('keysBox').style.display = cfg.proxy ? 'none' : '';
     $('proxyState').textContent = cfg.proxy ? 'Conectado a través de tu servidor: las claves están guardadas allí, no en el móvil.' : '';
   }
-  // Estado de los avisos de ntfy (los envía el servidor cada 15 min, con el móvil apagado).
+  // Estado de los avisos de ntfy (los envía el servidor, con el móvil apagado).
   const ago = (iso) => { const m = Math.round((Date.now() - Date.parse(iso)) / 60000); return m < 1 ? 'ahora' : m < 90 ? `hace ${m} min` : `hace ${Math.round(m / 60)} h`; };
   function ntfyText(s) {
     if (!s) return 'No se pudo leer el estado del servidor.';
     const out = [s.ntfy ? `Tema configurado: ${s.ntfy.topic} en ${s.ntfy.server}.` : 'Falta el secreto NTFY_TOPIC en Cloudflare: sin él no se envía ningún aviso.'];
     if (!s.etoroKeys) out.push('Faltan las claves de eToro en Cloudflare.');
     out.push(s.cronLast ? `Última comprobación automática ${ago(s.cronLast.t)}: ${s.cronLast.result}.` : 'El servidor aún no ha registrado ninguna comprobación automática (o es anterior a esta versión).');
-    if (s.cronLast && Date.now() - Date.parse(s.cronLast.t) > 40 * 60000) out.push('⚠︎ Lleva más de 40 min sin comprobar: revisa en Cloudflare que el Worker tenga el cron */15 activo y no dé errores.');
+    if (s.cronLast && Date.now() - Date.parse(s.cronLast.t) > 40 * 60000) out.push('⚠︎ Lleva más de 40 min sin comprobar: revisa en Cloudflare que el Worker tenga el cron activo y no dé errores (con el mercado cerrado es normal).');
     if (s.ntfyLast) out.push(`Último aviso ${ago(s.ntfyLast.t)}: «${s.ntfyLast.title}» ${s.ntfyLast.ok ? 'enviado' : 'FALLÓ: ' + s.ntfyLast.error}.`);
-    out.push('Solo se avisa al cambiar: COMPRAR/VENDER/ESPERAR o movimiento de la próxima hora a ALTO y de vuelta.');
+    out.push('Se avisa de: movimiento probable (como mucho 2 al día), señal de COMPRA o VENTA, cierre a las 6 h y víspera de NFP o Fed.');
     return out.join(' ');
   }
   async function loadNtfyState() { if (cfg.proxy) $('ntfyState').textContent = ntfyText(await getJSON('api/status')); }
@@ -304,20 +294,13 @@
   $('openSettings').addEventListener('click', openSettings);
   $('settings').addEventListener('close', async () => {
     if ($('settings').returnValue !== 'ok') return;
-    const refs = {};
-    for (const k of ['m15', 'h1', 'h4']) refs[k] = Math.max(1, +$('ref_' + k).value || cfg.refs[k]);
     const sourceChanged = cfg.source !== $('source').value;
-    Object.assign(cfg, { source: $('source').value, apiKey: $('apiKey').value.trim(), userKey: $('userKey').value.trim(), pin: $('pin').value.trim(), notify: $('notify').checked, refs });
+    Object.assign(cfg, { source: $('source').value, apiKey: $('apiKey').value.trim(), userKey: $('userKey').value.trim(), pin: $('pin').value.trim(), notify: $('notify').checked });
     delete cfg.instrumentId;
-    const next = { ...params, mode: $('mode').value, threshold: +$('threshold').value, agree: +$('agree').value, htf: $('htf').checked };
     save();
-    if (JSON.stringify(pick(next)) !== JSON.stringify(pick(params))) {
-      try { await pushServerParams(next); } catch (e) { showError(e.message); }
-    }
     if (cfg.notify && 'Notification' in window && Notification.permission === 'default') await Notification.requestPermission();
-    if (sourceChanged) { slow = { at: 0, c15: null, history: [], paper: null, pf: null, rv: null, rvAt: 0 }; fitted = false; }
-    slow.at = 0;
-    lastLevel = null; refresh();
+    if (sourceChanged) { slow = { at: 0, sys: null, pf: null, rv: null, rvAt: 0 }; fitted = false; }
+    slow.at = 0; last = null; refresh();
   });
 
   $('refresh').addEventListener('click', () => { slow.at = 0; refresh(); });
@@ -327,7 +310,6 @@
 
   (async function init() {
     cfg.proxy = await Data.detectProxy();
-    if (cfg.proxy) await loadServerParams();
     if (cfg.source === 'etoro' && !cfg.proxy && !(cfg.apiKey && cfg.userKey)) {
       showError('Para usar tu cuenta de eToro añade tus claves en Ajustes, o elige la fuente demo.');
       openSettings(); return schedule();

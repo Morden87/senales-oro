@@ -7,19 +7,19 @@ directory = "./public"
 binding = "ASSETS"
 run_worker_first = ["/etoro/*", "/api/*"]
 
-# Cada 5 minutos: la comprobación completa cada 15 min y, entre medias, solo la de tu pirámide de posiciones
+# Cada 5 minutos: cada 15 min la comprobación completa (velas de 1 min, pirámide y, tras el cierre de cada hora, el sistema en dos pasos); entre medias, solo la pirámide
 [triggers]
 crons = ["*/5 * * * *"]
 
-# Guarda la última recomendación para detectar el paso a ESPERAR.
+# Guarda el estado del sistema, la prueba en papel, el histórico de 1 min y la pirámide.
 # Sin id: Cloudflare lo crea automáticamente en el primer despliegue.
 [[kv_namespaces]]
 binding = "STATE"
 
 [vars]
 NTFY_SERVER = "https://ntfy.sh"
-THRESHOLD = "0.22"
-MIN_MOVE = "5"
+# Fechas de la Fed añadidas a las de public/sistema.js (AAAA-MM-DD, separadas por comas).
+FED_DATES = ""
 # Las estadísticas de tus operaciones empiezan aquí (creación de Cortés); lo anterior se omite.
 STATS_FROM = "2026-10-28T12:56:00Z"
 # Pirámide: "contra" = añades un escalón cada PYR_STEP $ en tu contra (promediar); "favor" = a tu favor.
